@@ -1,0 +1,23 @@
+/* Prints the advertising and trend figures: npx vite-node scripts/check-marketing.ts */
+import { getState } from "../src/jodz/store";
+import { adsSummary, platformTotals, adsDaily, budgetPacing, plannedAdSpend, campaignRows, adAlerts, signalRows, colourTrends, calendarRows, applySignal, approveAdChange } from "../src/jodz/marketing";
+import { cashOutlook, variantRows } from "../src/jodz/derive";
+const s = () => getState();
+const a = adsSummary(s());
+console.log("spend", a.all.spend, "meta", a.meta.spend, "google", a.google.spend, "claimed", a.claimed, "overclaim", a.overClaim, "MER", a.mer.toFixed(2), "cpPaidOrder", a.costPerPaidOrder.toFixed(2), "meta ctr", (a.meta.ctr*100).toFixed(2), "freq", a.meta.frequency.toFixed(2));
+const d = adsDaily(); console.log("daily sums", d.reduce((x,y)=>x+y.metaSpend,0), d.reduce((x,y)=>x+y.googleSpend,0), d.reduce((x,y)=>x+y.metaRev,0), d.reduce((x,y)=>x+y.googleRev,0));
+console.log("pacing", JSON.stringify(budgetPacing()));
+console.log("planned", JSON.stringify(plannedAdSpend(s())));
+console.log(campaignRows(s()).map(c => c.id + " " + c.stock.label + " [" + c.flags.join(",") + "] roas " + c.roas.toFixed(2)).join("\n"));
+console.log(adAlerts(s()).map(x => x.tone + " " + x.title + " :: " + x.detail).join("\n"));
+console.log(signalRows(s()).map(x => x.kind + " | " + x.title + " | " + x.change + " | " + x.status).join("\n"));
+console.log(colourTrends(s()).map(c => c.name + " " + c.searchChange + "% share " + (c.salesShare*100).toFixed(0) + "% " + c.verdict).join("\n"));
+console.log(calendarRows().map(c => c.name + " " + c.days + "d " + c.note).join("\n"));
+const before = variantRows(s()).find(r => r.sku === "JZ-AN-S")!;
+applySignal("sig-navy");
+const after = variantRows(s()).find(r => r.sku === "JZ-AN-S")!;
+console.log("AN-S rate", before.rate.toFixed(2), "->", after.rate.toFixed(2), "cover", before.cover?.toFixed(1), "->", after.cover?.toFixed(1));
+const c0 = cashOutlook(s(), { includeDraft: true }).horizons.map(h => h.closing).join("/");
+approveAdChange("nov-trim");
+const c1 = cashOutlook(s(), { includeDraft: true }).horizons.map(h => h.closing).join("/");
+console.log("cash with PO", c0, "-> after nov trim", c1, "planned", JSON.stringify(plannedAdSpend(s())));

@@ -17,7 +17,7 @@ export default function WorkSchedules({ v }: Props) {
                 {txt(v.cal?.hint)}
               </div>
             </div>
-            <div style={{"display":"flex","alignItems":"center","gap":"2px","padding":"3px","background":"var(--surface-2)","border":"1px solid var(--border)","borderRadius":"6px"}}>
+            <div style={{"display":"flex","alignItems":"center","gap":"2px","padding":"3px","background":"var(--surface-2)","border":"1px solid var(--border)","borderRadius":"var(--r-sm,9px)"}}>
               {arr(v.cal?.scopes).map((s: any, i35: number) => (
                 <Fragment key={i35}>
                   <button onClick={s?.pick} style={css(s?.style)}>
@@ -196,7 +196,7 @@ export default function WorkSchedules({ v }: Props) {
               {txt(v.cal?.monthTitle)}
             </div>
             <div style={{"fontSize":"11.5px","color":"var(--dim)","marginTop":"3px"}}>
-              {"The whole month — every routine, automation and scheduled task."}
+              {"The whole month: every routine, automation and scheduled task."}
             </div>
           </div>
           <div style={{"display":"flex","flexWrap":"wrap","gap":"14px"}}>

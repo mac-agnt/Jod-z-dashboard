@@ -1,7 +1,8 @@
 import { Fragment } from "react";
 import { arr, cat, css, cx, txt } from "../runtime/template";
 import AgentFace from "../components/AgentFace";
-import DashboardKpiBand from "./pages/DashboardKpiBand";
+import LiquidTabs from "../components/LiquidTabs";
+import { JodzPage, JodzOverlays } from "../jodz/JodzRoot";
 import Home from "./pages/Home";
 import Work from "./pages/Work";
 import Records from "./pages/Records";
@@ -9,7 +10,6 @@ import RecordsFiles from "./pages/RecordsFiles";
 import RecordsOntology from "./pages/RecordsOntology";
 import Activity from "./pages/Activity";
 import Settings from "./pages/Settings";
-import Dashboard from "./pages/Dashboard";
 import Agents from "./pages/Agents";
 import HeliosMini from "./overlays/HeliosMini";
 import WorkViewer from "./overlays/WorkViewer";
@@ -31,14 +31,14 @@ export default function AppShell({ v }: Props) {
         <span style={css(v.railThumbStyle)} />
         <div style={css(cat(v.railRowStyle, "margin-bottom:22px"))}>
           <button className={cx("ix0", "ix1")} onClick={v.toggleRail} title={v.railLabel} style={{"width":"36px","height":"36px","flex":"none","border":"0","borderRadius":"var(--cta-r,11px)","background":"var(--accent-fill,var(--accent))","color":"var(--on-accent)","boxShadow":"var(--accent-glow,none)","cursor":"pointer","display":"flex","alignItems":"center","justifyContent":"center","fontSize":"13px","fontWeight":"600","padding":"0","transition":"transform .2s var(--ease)"}}>
-            {"K"}
+            <img src="/logo/jodz-logo-cream.png" alt="" className="jz-tile" style={{"width":"24px","height":"auto","display":"block"}} />
           </button>
           <span style={css(v.brandStyle)}>
             <span style={{"display":"block","fontSize":"15px","fontWeight":"600","letterSpacing":"-.3px","color":"var(--ink)"}}>
-              {"Kilbride Group"}
+              <img src="/logo/jodz-logo-cream.png" alt="Jod-Z" className="jz-logo" />
             </span>
             <span style={{"display":"block","marginTop":"2px","fontSize":"9px","fontWeight":"500","letterSpacing":".16em","color":"var(--accent)"}}>
-              {"PULSE · OPERATIONS"}
+              {"PULSE · DEMO WORKSPACE"}
             </span>
           </span>
           {v.railOpen && (
@@ -95,14 +95,14 @@ export default function AppShell({ v }: Props) {
               </div>
               <div style={{"display":"flex","alignItems":"center","gap":"11px","marginTop":"12px"}}>
                 <div style={{"width":"40px","height":"40px","flex":"none","borderRadius":"999px","background":"var(--accent-soft)","color":"var(--accent)","display":"flex","alignItems":"center","justifyContent":"center","fontSize":"13px","fontWeight":"600"}}>
-                  {"MK"}
+                  {"AD"}
                 </div>
                 <div style={{"minWidth":"0"}}>
                   <div style={{"fontSize":"17px","fontWeight":"600","letterSpacing":"-.3px","color":"var(--ink)","whiteSpace":"nowrap","overflow":"hidden","textOverflow":"ellipsis"}}>
-                    {"Martin Kilbride"}
+                    {"Aoibhe Dunleavy"}
                   </div>
                   <div style={{"fontSize":"12.5px","color":"var(--faint)","marginTop":"2px","whiteSpace":"nowrap","overflow":"hidden","textOverflow":"ellipsis"}}>
-                    {"Kilbride Group · Owner"}
+                    {"Owner · demo profile"}
                   </div>
                 </div>
               </div>
@@ -142,14 +142,14 @@ export default function AppShell({ v }: Props) {
             </button>
             <div style={css(cat(v.railRowStyle, "margin-top:10px;padding:12px 10px;border-top:1px solid var(--border)"))}>
               <div style={{"width":"40px","height":"40px","flex":"none","borderRadius":"12px","background":"var(--surface-2)","border":"1px solid var(--border)","color":"var(--body)","display":"flex","alignItems":"center","justifyContent":"center","fontSize":"12px","fontWeight":"600","cursor":"pointer"}}>
-                {"MK"}
+                {"AD"}
               </div>
               <span style={css(v.brandStyle)}>
                 <span style={{"display":"block","fontSize":"14px","fontWeight":"500","color":"var(--ink)"}}>
-                  {"Martin Kilbride"}
+                  {"Aoibhe Dunleavy"}
                 </span>
                 <span style={{"display":"block","marginTop":"2px","fontSize":"12px","color":"var(--faint)"}}>
-                  {"Kilbride Group · Owner"}
+                  {"Owner · demo profile"}
                 </span>
               </span>
             </div>
@@ -200,71 +200,19 @@ export default function AppShell({ v }: Props) {
             )}
             {v.showPillNav && (
               <>
-                <div style={css(v.navGroupStyle)}>
-                  {v.tabsLoose && (
-                    <>
-                      <span style={css(v.navThumb)} />
-                    </>
-                  )}
-                  {arr(v.contextNav).map((t: any, i1: number) => (
-                    <Fragment key={i1}>
-                      {t?.active && (
-                        <>
-                          <button onClick={t?.go} data-nav-active="1" style={css(cat("position:relative;z-index:1;display:flex;align-items:center;justify-content:center;gap:8px;height:42px;padding:", v.tabPad, ";border:0;border-radius:999px;cursor:pointer;font-size:13.5px;white-space:nowrap;background:", v.tabActiveBg, ";color:var(--ink);font-weight:600;transition:color .3s var(--ease)"))}>
-                            {txt(t?.label)}
-                            {t?.showCount && (
-                              <>
-                                <span style={{"position":"relative","padding":"1px 7px","borderRadius":"999px","background":"var(--accent-soft)","fontFamily":"var(--mono)","fontSize":"11px","color":"var(--accent)"}}>
-                                  {txt(t?.count)}
-                                </span>
-                              </>
-                            )}
-                          </button>
-                        </>
-                      )}
-                      {t?.inactive && (
-                        <>
-                          <button className="ix3" onClick={t?.go} style={css(cat("position:relative;z-index:1;display:flex;align-items:center;justify-content:center;gap:8px;height:42px;padding:", v.tabPad, ";border:0;border-radius:999px;cursor:pointer;font-size:13.5px;white-space:nowrap;background:none;color:var(--dim);font-weight:500;transition:color .3s var(--ease)"))}>
-                            {txt(t?.label)}
-                            {t?.showCount && (
-                              <>
-                                <span style={{"padding":"1px 7px","borderRadius":"999px","minHeight":"15px","background":"var(--track)","fontFamily":"var(--mono)","fontSize":"10px","color":"var(--faint)"}}>
-                                  {txt(t?.count)}
-                                </span>
-                              </>
-                            )}
-                          </button>
-                        </>
-                      )}
-                    </Fragment>
-                  ))}
-                </div>
+                <LiquidTabs items={arr(v.contextNav)} baseStyle={css(v.navGroupStyle)} pad={v.tabPad} />
               </>
             )}
-            <div style={css(cat("flex:", v.searchWrapFlex, ";min-width:42px;display:flex;align-items:center;justify-content:center;padding:0 6px"))}>
-              <button className="ix7" onClick={v.openPalette} title={v.searchHint} style={css(v.searchBarStyle)}>
+            <div className="hs-wrap">
+              <button className="hs-btn" onClick={v.openPalette} title={v.searchHint} aria-label={v.searchHint}>
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" style={{"flex":"none"}}>
                   <path d="m21 21-4.3-4.3 M17 11a6 6 0 1 1-12 0 6 6 0 0 1 12 0" />
                 </svg>
-                {v.searchExpanded && (
-                  <>
-                    <span style={{"flex":"1","minWidth":"0","textAlign":"left","fontSize":"13px","overflow":"hidden","textOverflow":"ellipsis","whiteSpace":"nowrap"}}>
-                      {txt(v.searchHint)}
-                    </span>
-                    <span style={{"flex":"none","height":"28px","padding":"0 10px","display":"flex","alignItems":"center","background":"var(--surface-2)","borderRadius":"999px","fontFamily":"var(--mono)","fontSize":"10.5px","color":"var(--faint)"}}>
-                      {"⌘K"}
-                    </span>
-                  </>
-                )}
+                <span className="hs-label">{txt(v.searchHint)}</span>
+                <span className="hs-kbd">{"⌘K"}</span>
               </button>
+              {v.showHint && <span className="hs-hint">{txt(v.contextHint)}</span>}
             </div>
-            {v.showHint && (
-              <>
-                <span style={{"flex":"0 1 auto","minWidth":"0","padding":"0 12px","fontFamily":"var(--mono)","fontSize":"9.5px","letterSpacing":"0.11em","color":"var(--faint)","whiteSpace":"nowrap","overflow":"hidden","textOverflow":"ellipsis"}}>
-                  {txt(v.contextHint)}
-                </span>
-              </>
-            )}
             {v.barOpen && (
               <>
                 <div style={{"width":"1px","height":"18px","flex":"none","margin":"0 4px","background":"var(--border)"}} />
@@ -310,7 +258,7 @@ export default function AppShell({ v }: Props) {
                         <>
                           <div style={{"minWidth":"0"}}>
                             <div style={{"fontSize":"12px","fontWeight":"500","lineHeight":"1.2","whiteSpace":"nowrap"}}>
-                              {"Martin Kilbride"}
+                              {"Aoibhe Dunleavy"}
                             </div>
                             <div style={{"fontSize":"10.5px","color":"var(--faint)","lineHeight":"1.2"}}>
                               {"Owner"}
@@ -385,7 +333,6 @@ export default function AppShell({ v }: Props) {
             </div>
           </>
         )}
-        {v.isDashboard && <DashboardKpiBand v={v} />}
         <div data-scroll-main="1" style={{"flex":"1","minHeight":"0","overflowY":"auto","overflowX":"hidden","scrollbarWidth":"none"}}>
           {v.isChat && <Home v={v} />}
           {v.isWork && <Work v={v} />}
@@ -451,7 +398,7 @@ export default function AppShell({ v }: Props) {
                           {"No contacts match"}
                         </div>
                         <div style={{"fontSize":"13px","color":"var(--dim)","marginTop":"6px"}}>
-                          {"Try fewer words — it matches on name, role, organisation and tag."}
+                          {"Try fewer words. It matches on name, role, organisation and tag."}
                         </div>
                       </div>
                     </>
@@ -575,7 +522,7 @@ export default function AppShell({ v }: Props) {
             </>
           )}
           {v.isSettings && <Settings v={v} />}
-          {v.isDashboard && <Dashboard v={v} />}
+          {v.isJodz && <JodzPage page={v.jodzPage} />}
           {v.isAgents && <Agents v={v} />}
         </div>
       </main>
@@ -770,7 +717,7 @@ export default function AppShell({ v }: Props) {
                 <>
                   <div style={{"padding":"8px 24px 4px","animation":"expandIn .3s var(--ease) both"}}>
                     <div style={{"fontFamily":"var(--mono)","fontSize":"9.5px","letterSpacing":"0.13em","color":"var(--faint)","marginTop":"10px"}}>
-                      {"PULSE BUILT THIS — EDIT ANYTHING"}
+                      {"PULSE BUILT THIS · EDIT ANYTHING"}
                     </div>
                     <div style={{"marginTop":"14px"}}>
                       {arr(v.builder?.blocks).map((b: any, i145: number) => (
@@ -819,6 +766,7 @@ export default function AppShell({ v }: Props) {
       {v.newRec?.open && <NewRecordDialog v={v} />}
       {v.paletteOpen && <CommandPalette v={v} />}
       {v.bgGallery?.open && <BackgroundGallery v={v} />}
+      <JodzOverlays />
     </div>
     </>
   );

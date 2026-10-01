@@ -39,7 +39,7 @@ export default function Home({ v }: Props) {
                       {txt(v.greetingName)}
                     </span>
                   </h1>
-                  <div style={{"marginTop":"10px","fontSize":"13px","color":"var(--dim)","textWrap":"pretty"}}>
+                  <div style={{"marginTop":"12px","fontSize":"12px","color":"var(--faint)","textWrap":"pretty"}}>
                     {txt(v.homeSubline)}
                   </div>
                 </div>
@@ -48,13 +48,22 @@ export default function Home({ v }: Props) {
             {v.threadOpen && <HomeThread v={v} />}
           </div>
           <div style={{"flex":"none","paddingTop":"14px"}}>
+            {v.heliosEmpty && (
+              <div style={{"display":"flex","flexWrap":"wrap","justifyContent":"center","gap":"8px","marginBottom":"12px"}}>
+                {arr(v.suggestions).map((q: any, iq: number) => (
+                  <button key={iq} className="ixf" onClick={q?.run} style={{"height":"32px","padding":"0 14px","border":"1px solid var(--border)","borderRadius":"999px","background":"var(--surface-faint)","backdropFilter":"blur(18px)","color":"var(--body)","fontSize":"12.5px","cursor":"pointer","transition":"border-color .2s var(--ease),color .2s var(--ease),background .2s var(--ease)"}}>
+                    {txt(q?.label)}
+                  </button>
+                ))}
+              </div>
+            )}
             <div style={css(v.composerWidthStyle)}>
               <div className="ixi" style={css(v.composerShellStyle)}>
                 <div style={{"display":"flex","alignItems":"flex-end","gap":"10px","padding":"9px 9px 9px 17px"}}>
                   <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="var(--faint)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{"flex":"none","marginBottom":"9px"}}>
                     <path d="M21.4 11.05 12.25 20.2a5 5 0 0 1-7.07-7.07l8.49-8.49a3.5 3.5 0 0 1 4.95 4.95l-8.49 8.49a2 2 0 0 1-2.83-2.83l7.78-7.78" />
                   </svg>
-                  <textarea value={v.draft ?? ""} onChange={v.setDraft} onKeyDown={v.onDraftKey} rows={1} placeholder="Ask Pulse anything…" style={{"flex":"1","minWidth":"0","border":"0","outline":"0","resize":"none","background":"none","fontSize":"15px","lineHeight":"1.55","padding":"7px 0","maxHeight":"120px","overflowY":"hidden","scrollbarWidth":"none","textOverflow":"ellipsis"}} />
+                  <textarea value={v.draft ?? ""} onChange={v.setDraft} onKeyDown={v.onDraftKey} rows={1} placeholder="Ask about stock, orders or cash…" style={{"flex":"1","minWidth":"0","border":"0","outline":"0","resize":"none","background":"none","fontSize":"15px","lineHeight":"1.55","padding":"7px 0","maxHeight":"120px","overflowY":"hidden","scrollbarWidth":"none","textOverflow":"ellipsis"}} />
                   <button className={cx("ixj", "ixk")} onClick={v.send} style={{"flex":"none","width":"34px","height":"34px","border":"0","borderRadius":"var(--cta-r,12px)","background":"var(--accent-fill,var(--accent))","color":"var(--on-accent)","boxShadow":"var(--accent-glow,none)","cursor":"pointer","display":"flex","alignItems":"center","justifyContent":"center","transition":"transform .2s var(--ease),box-shadow .24s var(--ease),background .2s var(--ease)"}}>
                     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <path d="M12 19V5 M5 12l7-7 7 7" />

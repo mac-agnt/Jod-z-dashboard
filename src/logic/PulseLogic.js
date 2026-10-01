@@ -65,14 +65,43 @@ import {
   hexRGB,
   buildGraph
 } from "./data";
+import { answerFor, runAction, decisions as jodzDecisions, upcoming as jodzUpcoming, numbers as jodzNumbers, homeTasks as jodzTasks, activityFeed as jodzActivity, waitingSummary as jodzWaiting } from "../jodz/home";
+import { linkLabel as linkLabelOf, staff as jodzStaff } from "../jodz/derive";
+import { goTo as jodzGoTo, openRecord as jodzOpenRecord } from "../jodz/store";
+import { completeTask as jodzCompleteTask, openDrawer as jodzOpenDrawer, decideApproval as jodzDecide } from "../jodz/store";
+import { subscribe as jodzSubscribe, registerNavigator, getState as jodzState, setSection as jodzSetSection } from "../jodz/store";
+
+/* True for a light colour (hex or rgb/rgba). The ontology draws ink-on-paper on light themes. */
+function isLightColour(str){
+  let r = 0, g = 0, b = 0;
+  const s = (str || "").trim();
+  if (s[0] === "#"){
+    const h = s.length === 4 ? s.slice(1).split("").map(c => c + c).join("") : s.slice(1, 7);
+    r = parseInt(h.slice(0, 2), 16); g = parseInt(h.slice(2, 4), 16); b = parseInt(h.slice(4, 6), 16);
+  } else {
+    const m = s.match(/[\d.]+/g);
+    if (!m || m.length < 3) return false;
+    r = +m[0]; g = +m[1]; b = +m[2];
+  }
+  return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255 > 0.5;
+}
+/* A cluster hue deepened so it reads as ink on a light ground. */
+const _inkCache = {};
+function inkOf(hex){
+  if (_inkCache[hex]) return _inkCache[hex];
+  const c = hexRGB(hex);
+  const v = "rgb(" + Math.round(c[0] * 0.6) + "," + Math.round(c[1] * 0.6) + "," + Math.round(c[2] * 0.6) + ")";
+  _inkCache[hex] = v;
+  return v;
+}
 
 /* All state and behaviour for Pulse. renderVals() returns the flat object the views render from. */
 export default class PulseLogic extends DCLogic {
-  state = { w: typeof window === "undefined" ? 1440 : window.innerWidth, theme:"harbour", page:"Home", draft:"", query:"", thread:[], typed:0, paletteOpen:false, showNotifs:false, palScope:"All", palSel:0, palRecent:["Dunne & Sons Ltd","Credit Control"],
+  state = { w: typeof window === "undefined" ? 1440 : window.innerWidth, theme:"light", page:"Home", draft:"", query:"", thread:[], typed:0, paletteOpen:false, showNotifs:false, palScope:"All", palSel:0, palRecent:["JOD-W1041","Stock & Demand"],
             done:{}, resolved:{}, approved:{}, inboxFilter:"All", approvalFilter:"Awaiting you", open:null, range:"30d",
             workDoc:null, workDocTab:"work",
             queue:"mine", recordTab:"Overview", record:"person", hovered:null, hoverLabel:"", hoverHint:"", hoverTop:0,
-            flags:{approvals:true, automations:true, insights:true, customEntities:false, whatsapp:true, composio:false},
+            flags:{approvals:true, automations:true, insights:true, customEntities:false, whatsapp:false, composio:false},
             workSection:"tasks", workViews:{}, addedTasks:[], newTask:"", newPriority:"Medium",
             timerRunning:false, timerTask:null, timerPreset:null, scheduleOff:{},
             adminCard:null, adminFlags:{},
@@ -83,7 +112,7 @@ export default class PulseLogic extends DCLogic {
             newRecOpen:false, newRecName:"", newRecTemplate:"Field sheet", newRecCat:"All",
             opsFilter:"all", opsOff:{}, opsOpen:null, opsScope:"week", opsDay:26, opsOrder:null, opsDrag:null,
             opsBuilderOpen:false, opsBuilderMode:"workflow", builderText:"", builderGenerated:false,
-            railOpen:true, barOpen:true, chatRailPinned:false, widgetEdit:false, widgets:["inbox","work","activity"],
+            railOpen:true, barOpen:true, chatRailPinned:false, widgetEdit:false, widgets:["inbox","visits","work","activity"],
             kpiEdit:false, kpiKeys:["revenue","cash","overdue","margin","jobs"],
             aspect:"sales", filterMenuOpen:false, customFilter:"", extraFilters:[],
             workWidget:"queue", miniOpen:false, miniThread:[], miniDraft:"", miniTab:"chat", miniTone:"plain", miniWorkOpen:"tasks",
@@ -113,33 +142,9 @@ export default class PulseLogic extends DCLogic {
       at: at === undefined ? Date.now() : at, fresh: at === undefined};
   }
 
-  tickActivity(){
-    if (!this.feeds) return;
-    const now = Date.now();
-    let dirty = false;
-    for (const def of STREAM_DEFS){
-      const list = this.feeds[def.id];
-      for (const e of list){
-        if (e.status === "working"){
-          e.progress = Math.min(100, e.progress + 2.4 + Math.random() * 3);
-          if (e.progress >= 100){ e.status = "completed"; dirty = true; }
-        }
-        if (e.fresh && now - e.at > 1400){ e.fresh = false; dirty = true; }
-      }
-      if (this.state.actPaused || this.state.actHover === def.id) continue;
-      if (now >= this._nextPush[def.id]){
-        const tpl = def.pool[Math.floor(Math.random() * def.pool.length)];
-        list.unshift(this.mkEvent(def, tpl));
-        if (list.length > 7) list.pop();
-        this._nextPush[def.id] = now + def.every * (0.7 + Math.random() * 0.7);
-        dirty = true;
-      }
-    }
-    if (dirty || now - (this._actStamp || 0) > 900){
-      this._actStamp = now;
-      try { this.setState({actTick: now}); } catch (e) {}
-    }
-  }
+  /* Activity is read from the shared Jod-Z event log in renderVals, so nothing is generated here. */
+  tickActivity(){}
+
 
   /* Several shortest-path searches run at once, each with its own hue. The
      settling order and parent tree are solved up front; the animation only
@@ -459,8 +464,10 @@ export default class PulseLogic extends DCLogic {
     const now = this.clock || 0;
     if (!this._css || now - this._cssAt > 600){
       const cs = getComputedStyle(cv);
-      const dk = cs.getPropertyValue("--ink").trim() !== "#16181c";
-      this._css = {dark:dk, pathInk: dk ? "#ffffff" : "#16181c",
+      // Dark or light is read from the page background, not a hard-coded ink value,
+      // so any theme renders the right way round.
+      const dk = !isLightColour(cs.getPropertyValue("--bg").trim());
+      this._css = {dark:dk, pathInk: dk ? "#ffffff" : "#141210",
         matchInk: cs.getPropertyValue("--accent").trim() || "#c8f04b"};
       this._cssAt = now;
     }
@@ -539,7 +546,7 @@ export default class PulseLogic extends DCLogic {
         const front = ((A[2] + B[2]) / 2 + R) / (2 * R);
         ctx.strokeStyle = dark
           ? "rgba(190,232,255," + (alphaFront * (0.12 + front * 0.88)).toFixed(3) + ")"
-          : "rgba(20,22,28," + (alphaFront * (0.12 + front * 0.88)).toFixed(3) + ")";
+          : "rgba(60,48,30," + (alphaFront * 1.2 * (0.12 + front * 0.88)).toFixed(3) + ")";
         ctx.lineWidth = 0.5 + front * 0.5;
         ctx.beginPath(); ctx.moveTo(A[0], A[1]); ctx.lineTo(B[0], B[1]); ctx.stroke();
       }
@@ -556,7 +563,7 @@ export default class PulseLogic extends DCLogic {
       const mx = sx / hubs.length, my = sy / hubs.length;
       const depth = sd / hubs.length, front = ((sz / hubs.length) + R) / (2 * R);
       const rad = Math.max(30, R * scale * 0.22 * depth);
-      const a = (dark ? 0.17 : 0.1) * (0.35 + front * 0.65);
+      const a = (dark ? 0.17 : 0.2) * (0.35 + front * 0.65);
       this.stamp(bloom, this.glowSprite(CLUSTERS[ci][1], dark), mx, my, rad, a);
     }
     ctx.globalCompositeOperation = "source-over";
@@ -581,9 +588,9 @@ export default class PulseLogic extends DCLogic {
       const q = project(p[0], p[1], p[2]);
       const front = (q[2] + R * 1.8) / (R * 3.6);
       const tw = 0.55 + 0.45 * Math.sin(now / 900 + p[4]);
-      const a = (dark ? 0.5 : 0.22) * p[3] * tw * (0.25 + front * 0.75);
+      const a = (dark ? 0.5 : 0.3) * p[3] * tw * (0.25 + front * 0.75);
       if (a <= 0.01) continue;
-      ctx.fillStyle = dark ? "rgba(214,238,255," + a.toFixed(3) + ")" : "rgba(40,60,90," + a.toFixed(3) + ")";
+      ctx.fillStyle = dark ? "rgba(214,238,255," + a.toFixed(3) + ")" : "rgba(70,55,35," + a.toFixed(3) + ")";
       const rr = p[3] * (front > 0.55 ? 1.25 : 0.8);
       ctx.fillRect(q[0] - rr / 2, q[1] - rr / 2, rr, rr);
     }
@@ -640,12 +647,12 @@ export default class PulseLogic extends DCLogic {
       const cc = hexRGB(c);
       // a faint cluster-hue wash mixed into the resting field, instead of flat grey
       const mixT = 0.26 + t * 0.16;
-      const rr = Math.round(cc[0] * mixT + (dark ? 150 : 20) * (1 - mixT));
-      const gg = Math.round(cc[1] * mixT + (dark ? 164 : 22) * (1 - mixT));
-      const bb = Math.round(cc[2] * mixT + (dark ? 176 : 28) * (1 - mixT));
+      const rr = Math.round(cc[0] * mixT * (dark ? 1 : 0.6) + (dark ? 150 : 40) * (1 - mixT));
+      const gg = Math.round(cc[1] * mixT * (dark ? 1 : 0.6) + (dark ? 164 : 32) * (1 - mixT));
+      const bb = Math.round(cc[2] * mixT * (dark ? 1 : 0.6) + (dark ? 176 : 20) * (1 - mixT));
       if (blitOnly) break;
-      edgeCtx.strokeStyle = "rgba(" + rr + "," + gg + "," + bb + "," + (dark ? (0.045 + t * 0.17) : (0.03 + t * 0.14)).toFixed(3) + ")";
-      edgeCtx.lineWidth = 0.3 + t * 0.5;
+      edgeCtx.strokeStyle = "rgba(" + rr + "," + gg + "," + bb + "," + (dark ? (0.045 + t * 0.17) : (0.022 + t * 0.1)).toFixed(3) + ")";
+      edgeCtx.lineWidth = dark ? 0.3 + t * 0.5 : 0.35 + t * 0.6;
       const arr = bands[b], cnt = bandN[b];
       if (!cnt) continue;
       edgeCtx.beginPath();
@@ -693,7 +700,7 @@ export default class PulseLogic extends DCLogic {
       const fw = fwQ / 16;
       if (cluster < 0){
         v = dark ? "rgba(198,233,255," + (fw * 0.74).toFixed(3) + ")"
-                 : "rgba(24,48,90," + (fw * 0.56).toFixed(3) + ")";
+                 : "rgba(70,58,42," + (fw * 0.62).toFixed(3) + ")";
       } else {
         const c = hexRGB(CLUSTERS[cluster][1]);
         const mix = Math.max(0, (fw - 0.62) / 0.38);
@@ -701,8 +708,8 @@ export default class PulseLogic extends DCLogic {
           ? "rgba(" + Math.round(c[0] + (255 - c[0]) * mix * 0.55) + ","
             + Math.round(c[1] + (255 - c[1]) * mix * 0.55) + ","
             + Math.round(c[2] + (255 - c[2]) * mix * 0.55) + "," + (fw * 0.78).toFixed(3) + ")"
-          : "rgba(" + Math.round(c[0] * 0.7) + "," + Math.round(c[1] * 0.7) + ","
-            + Math.round(c[2] * 0.7) + "," + (fw * 0.6).toFixed(3) + ")";
+          : "rgba(" + Math.round(c[0] * 0.56) + "," + Math.round(c[1] * 0.56) + ","
+            + Math.round(c[2] * 0.56) + "," + Math.min(1, 0.28 + fw * 0.8).toFixed(3) + ")";
       }
       colCache[key] = v;
       return v;
@@ -736,7 +743,7 @@ export default class PulseLogic extends DCLogic {
         ctx.beginPath();
         for (let k = 0; k < list.length; k++){
           const i = list[k];
-          const r = Math.max(0.3, g.nodes[i].r * 0.56 * Math.pow(pd[i], 1.55) * zoomK);
+          const r = Math.max(0.3, g.nodes[i].r * (dark ? 0.56 : 0.64) * Math.pow(pd[i], 1.55) * zoomK);
           if (r < 1.1) ctx.rect(px[i] - r, py[i] - r, r * 2, r * 2);
           else { ctx.moveTo(px[i] + r, py[i]); ctx.arc(px[i], py[i], r, 0, 6.2832); }
         }
@@ -829,16 +836,17 @@ export default class PulseLogic extends DCLogic {
     for (const i of order){
       const nd = g.nodes[i];
       if (nd.kind === "leaf" || nd.kind === "core") continue;
-      const col = CLUSTERS[nd.cluster][1];
+      const col = dark ? CLUSTERS[nd.cluster][1] : inkOf(CLUSTERS[nd.cluster][1]);
       const fw = fog(i), dep = pd[i];
       const r = Math.max(0.85, nd.r * (nd.kind === "hub" ? 0.42 : 0.37) * Math.pow(dep, 1.4));
       if (nd.kind === "hub"){
         // Only the nearest hubs carry any halo at all, and it is a soft
         // brightening of the surrounding field rather than a lamp.
-        if (fw > 0.82) this.stamp(bloom, this.glowSprite(col, dark), px[i], py[i], r * 2.4, (fw - 0.82) * 0.28);
+        const hue = CLUSTERS[nd.cluster][1];
+        if (fw > 0.82) this.stamp(bloom, this.glowSprite(hue, dark), px[i], py[i], r * 2.4, (fw - 0.82) * 0.28);
         const flash = Math.max(0, 1 - Math.abs(pz[i] - scanZ) / (R * 0.08));
-        if (flash > 0.02) this.stamp(bloom, this.glowSprite(col, dark), px[i], py[i], r * 3.2, flash * 0.1);
-        ctx.globalAlpha = 0.45 + fw * 0.45;
+        if (flash > 0.02) this.stamp(bloom, this.glowSprite(hue, dark), px[i], py[i], r * 3.2, flash * 0.1);
+        ctx.globalAlpha = dark ? 0.45 + fw * 0.45 : 0.6 + fw * 0.4;
         ctx.fillStyle = col;
         ctx.beginPath(); ctx.arc(px[i], py[i], r, 0, 6.2832); ctx.fill();
         if (fw > 0.86){
@@ -848,7 +856,7 @@ export default class PulseLogic extends DCLogic {
         }
       } else {
         ctx.globalAlpha = fw * 0.5;
-        ctx.fillStyle = dark ? "rgba(226,242,255,.36)" : "rgba(20,22,28,.3)";
+        ctx.fillStyle = dark ? "rgba(226,242,255,.36)" : "rgba(40,32,20,.55)";
         ctx.beginPath(); ctx.arc(px[i], py[i], r, 0, 6.2832); ctx.fill();
       }
       ctx.shadowBlur = 0;
@@ -857,7 +865,7 @@ export default class PulseLogic extends DCLogic {
 
     /* ---- leader-line labels on the front hub of each cluster ---- */
     ctx.globalCompositeOperation = "source-over";
-    ctx.font = "500 10px 'IBM Plex Mono', ui-monospace, monospace";
+    ctx.font = dark ? "500 10px 'IBM Plex Mono', ui-monospace, monospace" : "600 10.5px Geist, system-ui, sans-serif";
     ctx.textBaseline = "middle";
     for (let ci = 0; ci < CLUSTERS.length; ci++){
       const hubs = g.hubs.filter(h => g.nodes[h].cluster === ci);
@@ -866,18 +874,23 @@ export default class PulseLogic extends DCLogic {
       for (const h of hubs) if (pz[h] > pz[i]) i = h;
       const f = fog(i);
       if (f < 0.66) continue;
-      const col = CLUSTERS[ci][1], a = Math.min(1, (f - 0.66) / 0.26);
+      const col = dark ? CLUSTERS[ci][1] : inkOf(CLUSTERS[ci][1]), a = Math.min(1, (f - 0.66) / 0.26);
       const right = px[i] < cx;
       const lx = px[i] + (right ? 15 : -15), ly = py[i] - 13;
-      ctx.globalAlpha = a * 0.45;
-      ctx.strokeStyle = col; ctx.lineWidth = 0.8;
+      ctx.globalAlpha = a * (dark ? 0.45 : 0.75);
+      ctx.strokeStyle = col; ctx.lineWidth = dark ? 0.8 : 1;
       ctx.beginPath();
       ctx.moveTo(px[i], py[i]); ctx.lineTo(lx, ly); ctx.lineTo(lx + (right ? 24 : -24), ly);
       ctx.stroke();
       ctx.globalAlpha = a * 0.92;
       ctx.textAlign = right ? "left" : "right";
-      ctx.fillStyle = dark ? "rgba(238,247,255,.94)" : "rgba(20,22,28,.92)";
-      ctx.fillText(CLUSTERS[ci][0].toUpperCase(), lx + (right ? 29 : -29), ly);
+      const lbl = CLUSTERS[ci][0].toUpperCase(), tx = lx + (right ? 29 : -29);
+      if (!dark){
+        ctx.lineJoin = "round"; ctx.lineWidth = 4; ctx.strokeStyle = "rgba(253,252,248,.92)";
+        ctx.strokeText(lbl, tx, ly);
+      }
+      ctx.fillStyle = dark ? "rgba(238,247,255,.94)" : "rgba(20,18,16,.94)";
+      ctx.fillText(lbl, tx, ly);
     }
     ctx.globalAlpha = 1;
     ctx.textAlign = "left";
@@ -897,7 +910,7 @@ export default class PulseLogic extends DCLogic {
     const vig = ctx.createRadialGradient(cx, cy, Math.min(box.width, box.height) * 0.28,
                                          cx, cy, Math.max(box.width, box.height) * 0.78);
     vig.addColorStop(0, "rgba(0,0,0,0)");
-    vig.addColorStop(1, dark ? "rgba(0,0,0,.5)" : "rgba(24,28,34,.16)");
+    vig.addColorStop(1, dark ? "rgba(0,0,0,.5)" : "rgba(120,95,60,.07)");
     ctx.fillStyle = vig;
     ctx.fillRect(0, 0, box.width, box.height);
   }
@@ -1013,7 +1026,7 @@ export default class PulseLogic extends DCLogic {
       if (asked < BRIEF_QUESTIONS.length){
         thread.push({kind:"msg", role:"agent",
           text: asked === 0
-            ? "\u201c" + text + "\u201d — I can do that. First, what should it cover?"
+            ? "\u201c" + text + "\u201d. I can do that. First, what should it cover?"
             : "Noted. One more: when should it land?"});
         thread.push({kind:"card", q:asked, done:false});
       } else {
@@ -1114,7 +1127,7 @@ export default class PulseLogic extends DCLogic {
       tuneDraft:"",
       tuneThread: (prev.tuneThread || []).concat([
         {role:"you", text},
-        {role:"agent", text:"Done — I pinned that to my prompt. It takes effect on the next run."}
+        {role:"agent", text:"Done. I pinned that to my prompt. It takes effect on the next run."}
       ]),
       sysPrompt: this.systemPrompt(prev) + "\n" + text
     }));
@@ -1141,6 +1154,8 @@ export default class PulseLogic extends DCLogic {
   }
 
   componentDidMount(){
+    registerNavigator((p) => this.go(p));
+    this._jodzUnsub = jodzSubscribe(() => this.forceUpdate());
     requestAnimationFrame(() => this.syncRailThumb());
     setTimeout(() => this.syncRailThumb(), 700);
     setTimeout(() => { const nav = document.querySelector('nav[data-rail-nav]');
@@ -1198,10 +1213,10 @@ export default class PulseLogic extends DCLogic {
     };
     window.addEventListener("paste", this._paste);
   }
-  componentWillUnmount(){ window.removeEventListener("paste", this._paste); window.removeEventListener("resize", this._resize); window.removeEventListener("keydown", this._key); clearInterval(this._t); clearInterval(this._clockTimer); clearInterval(this._flapBoot); cancelAnimationFrame(this._raf); clearInterval(this._fallback); clearInterval(this._actTimer); clearInterval(this._kpiTimer); }
+  componentWillUnmount(){ if (this._jodzUnsub) this._jodzUnsub(); window.removeEventListener("paste", this._paste); window.removeEventListener("resize", this._resize); window.removeEventListener("keydown", this._key); clearInterval(this._t); clearInterval(this._clockTimer); clearInterval(this._flapBoot); cancelAnimationFrame(this._raf); clearInterval(this._fallback); clearInterval(this._actTimer); clearInterval(this._kpiTimer); }
 
   ask(q){
-    const a = pickAnswer(q);
+    const a = answerFor(q);
     const words = a.text.split(" ").length;
     const thread = this.state.thread.concat([
       {role:"user", text:q},
@@ -1254,7 +1269,7 @@ export default class PulseLogic extends DCLogic {
     });
   }
   askMini(q){
-    const a = pickAnswer(q);
+    const a = answerFor(q);
     this.setState(prev => ({
       miniThread: prev.miniThread.concat([{role:"user", text:q}, {role:"helios", text:a.text}]),
       miniDraft: ""
@@ -1265,7 +1280,7 @@ export default class PulseLogic extends DCLogic {
       const title = prev.newTask.trim();
       if (!title) return {newTask:""};
       return {newTask:"", addedTasks: [{id:"n" + Date.now(), title, status:"Not started",
-        priority:prev.newPriority, who:"MK", due:"No due date", late:false,
+        priority:prev.newPriority, who:"AD", due:"No due date", late:false,
         client:"No client", day:"Any day", mins:"Mins", view:"All tasks"}].concat(prev.addedTasks)};
     });
   }
@@ -1282,7 +1297,7 @@ export default class PulseLogic extends DCLogic {
     this.setState(prev => {
       const extra = (prev.agentExtra[id] || []).concat([
         {kind:"user", text:q},
-        {kind:"agent", text:"on it. i'll come back when there's something to decide — nothing that changes a record goes through without your yes."}
+        {kind:"agent", text:answerFor(q).text}
       ]);
       return {agentExtra: Object.assign({}, prev.agentExtra, {[id]: extra}), agentDraft:""};
     });
@@ -1354,14 +1369,14 @@ export default class PulseLogic extends DCLogic {
         : lift;
       return "position:absolute;left:4px;top:4px;bottom:4px;z-index:0;pointer-events:none;"
         + "width:calc((100% - 8px) / " + n + ");transform:translateX(" + (i * 100) + "%);"
-        + "border-radius:var(--r-ctl,9px);background-color:" + fill + ";transition:" + SLIDE + ";" + glow;
+        + "border-radius:var(--r-seg,7px);background-color:" + fill + ";transition:" + SLIDE + ";" + glow;
     };
-    const railStyle = (active) => "position:relative;width:" + (st.railOpen ? "100%" : "44px") + ";height:42px;flex:none;display:flex;align-items:center;"
+    const railStyle = (active, quiet) => "position:relative;width:" + (st.railOpen ? "100%" : "44px") + ";height:" + (quiet ? "36px" : "42px") + ";flex:none;display:flex;align-items:center;"
       + (st.railOpen ? "gap:13px;justify-content:flex-start;padding:0 14px;font-size:14px;" : "gap:0;justify-content:center;")
       + "border:0;border-radius:14px;cursor:pointer;overflow:visible;"
       + "transition:background .42s var(--ease),color .35s var(--ease),box-shadow .42s var(--ease),transform .3s cubic-bezier(.16,1.4,.3,1);"
       + (active ? "background:none;color:var(--rail-active-ink,var(--accent))"
-                : "background:none;color:var(--mid)");
+                : "background:none;color:" + (quiet ? "var(--faint)" : "var(--mid)"));
     // Hover: the icon springs up to 1.3× with a small lift and tilt, a soft accent
     // glow blooms behind it, and an accent stroke re-draws the icon's outline.
     const glyphStyle = (active, hovered) => "position:relative;z-index:1;flex:none;overflow:visible;"
@@ -1404,15 +1419,18 @@ export default class PulseLogic extends DCLogic {
          glyphStyle: glyphStyle(n.page === page, st.hovered === idx || st.railHov === idx),
          haloStyle: haloStyle(n.page === page, st.hovered === idx || st.railHov === idx),
          drawStyle: drawStyle(n.page === page, st.hovered === idx || st.railHov === idx),
-         style: railStyle(n.page === page) + ";animation:railIn .42s var(--ease) " + (idx * 45) + "ms both",
+         style: railStyle(n.page === page, n.quiet) + ";animation:railIn .42s var(--ease) " + (idx * 45) + "ms both",
          enter: (e) => { if (!railOpen) this.hover(idx, n.label, n.hint || "", e); else this.setState({railHov:idx}); },
          leave: () => { if (this.state.railHov === idx) this.setState({railHov:null}); this.unhover(idx); },
          go: () => this.go(n.page)});
 
     const workSec = WORK_SECTIONS.find(s => s.id === st.workSection) || WORK_SECTIONS[0];
     const workView = st.workViews[workSec.id] || workSec.views[0];
-    const allWorkTasks = st.addedTasks.concat(WORK_TASKS);
-    const openWork = allWorkTasks.filter(t => !(st.done[t.id] !== undefined ? st.done[t.id] : t.done));
+    const allWorkTasks = st.addedTasks.concat(jodzTasks().map(t => ({id:t.id, title:t.title, status: t.status === "Done" ? "Done" : t.priority === "High" ? "In progress" : "Not started",
+      priority:t.priority, who:t.whoInitials, due:(t.late ? "Overdue · " : "Due ") + t.dueLabel, late:t.late, client:linkLabelOf(t.link), day:"Thread " + t.thread,
+      mins:jodzStaff(t.owner).name, view: t.due <= "2026-09-28" ? "Due soon" : "Open", high: t.priority === "High", done: t.status === "Done", open:t.open, jodz:true})));
+    const isDoneW = (t) => t.jodz ? !!t.done : !!(st.done[t.id] !== undefined ? st.done[t.id] : t.done);
+    const openWork = allWorkTasks.filter(t => !isDoneW(t));
     /* ---- the operations control room ---- */
     const opsOn = (w) => st.opsOff[w.id] === undefined ? w.on : !st.opsOff[w.id];
     const opsStatusOf = (w) => opsOn(w) ? w.status : "paused";
@@ -1503,7 +1521,7 @@ export default class PulseLogic extends DCLogic {
       hint: "Everything Pulse will do on its own, and when.",
       load: (st.opsOrder || ["o5","o2","o3","o10","o4","o6","o9","o8"]).length + " routines",
       scopes: [["week","Week"],["month","Month"]].map(s => ({label:s[1],
-        style: "height:26px;padding:0 12px;border:0;border-radius:var(--r-ctl,9px);cursor:pointer;font-size:11.5px;"
+        style: "height:26px;padding:0 12px;border:0;border-radius:var(--r-seg,7px);cursor:pointer;font-size:11.5px;"
           + (st.opsScope === s[0] ? "background:var(--pill-bg);color:var(--pill-ink);font-weight:500;box-shadow:0 2px 5px rgba(0,0,0,.34),0 6px 16px rgba(0,0,0,.22),inset 0 1px 0 rgba(255,255,255,.5);" : "background:none;color:" + DIM),
         pick: () => this.setState({opsScope:s[0]})})),
       dayNames: ["MON","TUE","WED","THU","FRI","SAT","SUN"],
@@ -1591,7 +1609,7 @@ export default class PulseLogic extends DCLogic {
       agendaTitle: st.opsDay === 26 ? "Today" : "Wed " + st.opsDay + " Aug",
       dragHint: true,
       agenda: (st.opsOrder || ["o5","o2","o3","o10","o4","o6","o9","o8"]).map(id => OPS_DEFS.find(w => w.id === id)).filter(Boolean).map(w => ({
-        time: (w.trigger.match(/\d{2}:\d{2}/) || ["—"])[0],
+        time: (w.trigger.match(/\d{2}:\d{2}/) || ["-"])[0],
         name:w.name, owner:w.owner,
         color: STATUS_TINT[opsStatusOf(w)][0],
         opacity: st.opsDrag === w.id ? "0.5" : "1",
@@ -1661,7 +1679,7 @@ export default class PulseLogic extends DCLogic {
       placeholder:BUILDER_COPY.placeholder, saveLabel:BUILDER_COPY.save,
       text: st.builderText, generated: st.builderGenerated,
       generateLabel: st.builderGenerated ? "Rebuild from the description" : "Build it",
-      footer: st.builderGenerated ? "Steps with effects always wait for your yes" : "Describe the outcome — Pulse works out the steps",
+      footer: st.builderGenerated ? "Steps with effects always wait for your yes" : "Describe the outcome. Pulse works out the steps",
       examples: BUILDER_COPY.examples.map(e => ({label:e, use: () => this.setState({builderText:e, builderGenerated:false})})),
       setText: (e) => this.setState({builderText:e.target.value}),
       generate: () => this.setState({builderGenerated:true}),
@@ -1673,7 +1691,7 @@ export default class PulseLogic extends DCLogic {
         ["CONDITION", "Skip deals already marked won or lost", "", "var(--border)", "var(--faint)"],
         ["ACTION", "Flag each one and write a management summary", "", "var(--border)", "var(--faint)"],
         ["AGENT", "Sales Agent", "It already has the deal context", "var(--border)", "var(--faint)"],
-        ["APPROVAL", "None — nothing leaves Pulse", "Add one if you want it emailed out", "var(--warn-soft)", AMBER],
+        ["APPROVAL", "None. Nothing leaves Pulse", "Add one if you want it emailed out", "var(--warn-soft)", AMBER],
         ["ON FAILURE", "Retry twice, then tell Operations", "", "var(--border)", "var(--faint)"],
         ["NOTIFY", "Post to Home and the management group", "", "var(--border)", "var(--faint)"]
       ].map(b => ({label:b[0], value:b[1], note:b[2], border:b[3], labelColor:b[4], edit: () => {}}))
@@ -1723,11 +1741,11 @@ export default class PulseLogic extends DCLogic {
 
     const HERO = {
       contacts:{eyebrow:"CONTACTS · " + CONTACTS.length + " ON FILE", title:"Everyone you deal with",
-        blurb:"Staff and external in one place. Ask in your own words — it matches on name, role, organisation and tag.",
-        placeholder:"Try “buyers in Cork”, “installers”, “on stop”…", kind:"KEYWORD", scroll:"SCROLL FOR THE FULL LIST",
-        suggestions:["on stop","installer","Casey","supplier"]},
+        blurb:"Staff and external in one place. Ask in your own words. It matches on name, role, organisation and tag.",
+        placeholder:"Try “buyer”, “supplier”, “finance”…", kind:"KEYWORD", scroll:"SCROLL FOR THE FULL LIST",
+        suggestions:["buyer","supplier","staff","Meadow"]},
       files:{eyebrow:"FILES · " + FILE_TREE.filter(r => r.type === "file").length + " DOCUMENTS",
-        title:"Everything on record", blurb:"Contracts, certificates and invoices. Indexed pages are the ones Helios can read from.",
+        title:"Everything on record", blurb:"Trade terms, supplier documents, size guides and invoices. Indexed pages are the ones the demo answers can cite.",
         placeholder:"Search inside every document…", kind:"FULL TEXT", scroll:"SCROLL FOR THE VIEWER",
         suggestions:["credit","expiry","framework","invoice"]},
       ontology:{eyebrow:"ONTOLOGY", title:"Ontology", blurb:recSec.blurb,
@@ -1753,7 +1771,7 @@ export default class PulseLogic extends DCLogic {
       askAnswer: recSec.id === "files"
         ? (fileHits ? fileHits + " of " + FILE_TREE.filter(r => r.type === "file").length + " documents contain that" : "No document contains that")
         : (matchedContacts.length
-          ? matchedContacts.length + " of " + CONTACTS.length + " match — on name, role, organisation and tag"
+          ? matchedContacts.length + " of " + CONTACTS.length + " match on name, role, organisation and tag"
           : "Nothing matched. It searches name, role, organisation and tag only."),
       askTerms,
       askSuggestions: HERO.suggestions.map(s => ({label:s,
@@ -1875,7 +1893,7 @@ export default class PulseLogic extends DCLogic {
       addAccount: () => {
         const f = st.peopleForm || {};
         if (!f.name || !f.email) return;
-        const entry = [f.name, "Invited", f.email, "—", "active", f.role || "Standard", "Just invited"];
+        const entry = [f.name, "Invited", f.email, "-", "active", f.role || "Standard", "Just invited"];
         this.setState(p => ({peopleExtra: (p.peopleExtra || []).concat([entry]), peopleAddOpen:false, peopleForm:{name:"",email:"",role:"Standard"}}));
       },
       rows: roster.map((p, i) => {
@@ -1980,12 +1998,12 @@ export default class PulseLogic extends DCLogic {
     };
 
     const adminModel = {
-      company: "Kilbride Group",
+      company: "Jod-Z",
       urgent: [
-        ["3", "employees awaiting access", AMBER, "var(--warn-soft)", "people"],
-        ["1", "integration disconnected", RED, "var(--bad-soft)", "integrations"],
-        ["74", "duplicate records", AMBER, "var(--warn-soft)", "health"],
-        ["2", "security recommendations", AMBER, "var(--warn-soft)", "security"]
+        [String(jodzState().approvals.filter(a => a.status === "Awaiting approval").length), "approvals awaiting the owner", AMBER, "var(--warn-soft)", "wf"],
+        ["0", "live integrations, all data simulated", AMBER, "var(--warn-soft)", "integrations"],
+        ["1", "accounting provider to confirm", AMBER, "var(--warn-soft)", "integrations"],
+        ["4", "demo users with access", GREEN, "var(--ok-soft)", "people"]
       ].map(u => ({count:u[0], label:u[1], dot:u[2], border:u[3],
         go: () => this.setState({adminOpen:u[4]})})),
       panelAnim: "animation:" + ((st.adminTick || 0) ? "panelSwapB" : "panelSwapA")
@@ -2060,28 +2078,41 @@ export default class PulseLogic extends DCLogic {
     };
 
     /* ---- activity ---- */
-    const feeds = this.feeds || {data:[], people:[], ai:[]};
+    /* Activity comes from the shared Jod-Z event log, so every simulated action shows up here. */
+    const OUTCOME_STATUS = {"Detected":"detected", "Draft prepared":"draft", "Awaiting approval":"awaiting",
+      "Approved in demo":"approved", "Simulated":"simulated", "Declined":"declined"};
+    const jodzEvents = jodzState().activity.map(a => ({id:a.id, stream: a.stream === "agents" ? "ai" : a.stream,
+      title:a.title, note:a.detail, actor:a.actor, rel: a.link ? linkLabelOf(a.link) : "Demo data",
+      src: a.actorKind === "agent" ? "Agent" : a.actorKind === "system" ? "Shopify (demo)" : "Pulse",
+      status: OUTCOME_STATUS[a.outcome] || "simulated", progress:100, at: Date.parse(a.at.replace(" ", "T")), fresh:false, link:a.link}));
+    const feeds = {data: jodzEvents.filter(e => e.stream === "data"), people: jodzEvents.filter(e => e.stream === "people"), ai: jodzEvents.filter(e => e.stream === "ai")};
     const allEvents = STREAM_DEFS.flatMap(d => feeds[d.id] || []);
     const ago = (at) => {
       const s = Math.max(1, Math.round((Date.now() - at) / 1000));
       return s < 60 ? s + " seconds ago" : s < 3600 ? Math.round(s / 60) + " min ago" : Math.round(s / 3600) + " h ago";
     };
     const STATUS_TINT2 = {completed:[GREEN,"var(--ok-soft)","completed"], working:[LIME,"var(--accent-faint)","working"],
-      failed:[RED,"var(--bad-soft)","failed"], awaiting:[AMBER,"var(--warn-soft)","awaiting approval"]};
+      failed:[RED,"var(--bad-soft)","failed"], awaiting:[AMBER,"var(--warn-soft)","awaiting approval"],
+      detected:[RED,"var(--bad-soft)","detected"], draft:[AMBER,"var(--warn-soft)","draft prepared"],
+      approved:[GREEN,"var(--ok-soft)","approved in demo"], simulated:[DIM,"var(--track)","simulated"], declined:[DIM,"var(--track)","declined"]};
     const statusChip = (st2) => {
       const t = STATUS_TINT2[st2] || STATUS_TINT2.completed;
       return "flex:none;padding:1px 8px;border-radius:var(--chip-r,6px);font-size:9.5px;font-weight:500;white-space:nowrap;"
         + "letter-spacing:.01em;background:" + t[1] + ";color:" + t[0];
     };
     const shortAgo = (at) => {
-      const s = Math.max(1, Math.round((Date.now() - at) / 1000));
-      return s < 60 ? s + "s" : s < 3600 ? Math.round(s / 60) + "m" : Math.round(s / 3600) + "h";
+      const d = new Date(at);
+      if (isNaN(d.getTime())) return "";
+      const iso = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+      return iso === "2026-09-26" ? String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0")
+        : d.getDate() + " " + ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][d.getMonth()];
     };
+    const needsYou = (e) => e.status === "failed" || e.status === "awaiting" || e.status === "detected" || e.status === "draft";
     const kpiMatch = (e) => {
       if (st.actKpi === "all") return true;
       if (st.actKpi === "people") return e.stream === "people";
       if (st.actKpi === "ai") return e.stream === "ai";
-      if (st.actKpi === "attention") return e.status === "failed" || e.status === "awaiting";
+      if (st.actKpi === "attention") return needsYou(e);
       return true;
     };
     const logQ = st.actQuery.trim().toLowerCase();
@@ -2097,7 +2128,7 @@ export default class PulseLogic extends DCLogic {
     const AGENT_STATE = {working:[LIME,"working"], complete:[GREEN,"idle"], waiting:[AMBER,"waiting on you"],
       thinking:["#6ad0f0","thinking"], attention:[RED,"needs attention"]};
     const solo = AGENT_DEFS.filter(a => !a.group);
-    const actionsFor = (i) => [84,62,47,38,34,29,24][i] || 18;
+    const actionsFor = (i) => jodzEvents.filter(e => e.actor === (solo[i] || {}).name).length;
     const agentRoster = solo.map((a, i) => {
       const t = AGENT_STATE[a.state] || AGENT_STATE.complete;
       const live = a.state === "working" || a.state === "thinking";
@@ -2119,33 +2150,33 @@ export default class PulseLogic extends DCLogic {
     const attentionLens = st.actKpi === "attention";
     const seenTri = {};
     const attentionItems = allEvents
-      .filter(e => e.status === "failed" || e.status === "awaiting")
+      .filter(needsYou)
       .filter(e => { const k = e.title + "|" + e.actor + "|" + e.rel; if (seenTri[k]) return false; seenTri[k] = 1; return true; })
       .sort((a, b) => a.at - b.at);
     const WHY = {
-      failed: ["Nothing was lost — the work is queued and posts on reconnect.", "Retry", "Open the connection"],
-      awaiting: ["Drafted and parked. It only moves when you say yes.", "Review and decide", "Open the record"]
+      detected: ["Flagged from the demo data. A person decides what happens next.", "Open the record", "Open the record"],
+      awaiting: ["Prepared and parked. Nothing is sent, placed or paid until someone approves it in the demo.", "Review and decide", "Open the record"]
     };
     const triageGroups = [
-      ["failed", "FAILED", "Stopped working. Nothing lost.", RED, "var(--bad-soft)"],
-      ["awaiting", "WAITING ON YOUR YES", "Written, never sent.", AMBER, "var(--warn-soft)"]
+      ["detected", "DETECTED", "Found by an agent. Needs a decision.", RED, "var(--bad-soft)"],
+      ["awaiting", "DRAFTS AND APPROVALS", "Prepared, never sent.", AMBER, "var(--warn-soft)"]
     ].map(g => {
-      const rows = attentionItems.filter(e => e.status === g[0]);
+      const rows = attentionItems.filter(e => g[0] === "detected" ? e.status === "detected" || e.status === "failed" : e.status === "awaiting" || e.status === "draft");
       return {key:g[0], label:g[1], blurb:g[2], count:String(rows.length), any: rows.length > 0,
         labelStyle: "font-family:" + MONO + ";font-size:9.5px;letter-spacing:0.14em;color:" + g[3],
         rows: rows.map((e, i) => ({
           title:e.title, note:e.note, actor:e.actor, rel:e.rel,
           why: WHY[g[0]][0], primary: WHY[g[0]][1], secondary: WHY[g[0]][2],
-          waited: "waiting " + shortAgo(e.at),
+          waited: "since " + shortAgo(e.at),
           railStyle: "position:absolute;left:0;top:0;bottom:0;width:2px;background:" + g[3],
-          chip: g[0] === "failed" ? "failed" : "awaiting your yes",
+          chip: g[0] === "detected" ? "detected" : (STATUS_TINT2[e.status] || STATUS_TINT2.awaiting)[2],
           chipStyle: "flex:none;padding:2px 9px;border-radius:var(--chip-r,6px);font-size:9.5px;font-weight:500;background:" + g[4] + ";color:" + g[3],
           primaryStyle: "flex:none;height:30px;padding:0 14px;border:0;border-radius:var(--cta-r,10px);background:var(--accent-fill,var(--accent));color:var(--on-accent);box-shadow:var(--accent-glow,none);"
             + "font-size:12.5px;font-weight:500;cursor:pointer;transition:transform .18s var(--ease)",
           style: "position:relative;display:flex;flex-direction:column;gap:9px;padding:15px 17px 15px 19px;background:var(--surface);"
             + "border:1px solid var(--border);border-radius:var(--card-r,18px);backdrop-filter:blur(20px);overflow:hidden;"
             + "transition:border-color .22s var(--ease);animation:glide .5s var(--ease) " + (i * 55) + "ms both",
-          open: () => this.setState({actOpen:e.id})
+          open: () => e.link ? jodzOpenRecord(e.link) : this.setState({actOpen:e.id})
         }))};
     });
     /* The People lens answers who is doing what right now — a roster of the
@@ -2154,7 +2185,7 @@ export default class PulseLogic extends DCLogic {
     const peopleEvents = (feeds.people || []);
     const staff = PEOPLE.slice(0, 6);
     const P_STATE = [[LIME,"active now"],[LIME,"active now"],["#6ad0f0","in a record"],[GREEN,"idle"],[AMBER,"away"],[GREEN,"idle"]];
-    const actsFor = (i) => [38,31,24,17,11,6][i] || 4;
+    const actsFor = (i) => jodzEvents.filter(e => e.actor === (staff[i] || [])[0]).length;
     const peopleRoster = staff.map((p, i) => {
       const t = P_STATE[i % P_STATE.length];
       const live = t[1] === "active now" || t[1] === "in a record";
@@ -2170,7 +2201,7 @@ export default class PulseLogic extends DCLogic {
         dotStyle: "width:6px;height:6px;flex:none;border-radius:50%;background:" + t[0]
           + (live ? ";box-shadow:0 0 8px " + t[0] + ";animation:breathe 1.6s ease-in-out infinite" : ""),
         stateStyle: "font-family:" + MONO + ";font-size:9px;letter-spacing:0.12em;color:" + t[0],
-        barStyle: "height:2px;border-radius:2px;width:" + Math.round(100 * acts / 38) + "%;background:" + t[0],
+        barStyle: "height:2px;border-radius:2px;width:" + Math.round(100 * acts / Math.max(1, ...staff.map((_, k) => actsFor(k)))) + "%;background:" + t[0],
         waiting, waitLabel: waiting ? "1 waiting on them" : "",
         style: "display:flex;flex-direction:column;gap:10px;width:100%;padding:14px 15px;text-align:left;cursor:pointer;"
           + "background:var(--surface);border:1px solid var(--border);border-radius:var(--card-r,18px);backdrop-filter:blur(20px);"
@@ -2188,13 +2219,13 @@ export default class PulseLogic extends DCLogic {
         : attentionLens
           ? "Everything that stopped working or is parked waiting on a decision, oldest first. Nothing here has been lost."
           : peopleLens
-            ? "42 of 48 staff have used Pulse today. Every edit, approval and decision below is written against the person who made it."
-            : "Data arriving, people acting and agents working — then the audit trail underneath.",
+            ? "Four demo profiles. Every edit, approval and decision below is written against the person who made it, and every one is simulated."
+            : "Simulated events from the demo data: data arriving, people acting and agents working, then the audit trail underneath.",
       peopleKpis: [
-        ["Active today", "42 of 48", "signed in and working", LIME],
-        ["Decisions made", "27", "approvals and sign-offs", GREEN],
-        ["Waiting on someone", "5", "parked on a person", AMBER],
-        ["Records touched", "184", "edits written to the spine", "#6ad0f0"]
+        ["People with activity", new Set(feeds.people.map(e => e.actor)).size + " of 4", "demo profiles", LIME],
+        ["Decisions made", String(jodzState().approvals.filter(a => a.status !== "Awaiting approval").length), "approved or declined in demo", GREEN],
+        ["Waiting on someone", String(jodzState().approvals.filter(a => a.status === "Awaiting approval").length), "approvals parked", AMBER],
+        ["Stock movements", String(jodzState().movements.length), "receipts, dispatches, returns", "#6ad0f0"]
       ].map((k, ki) => ({label:k[0], value:k[1], hint:k[2], dot:k[3],
         valueColor: k[3] === RED || k[3] === AMBER ? k[3] : INK,
         style: "padding:15px 17px 17px;border-radius:var(--card-r,18px);text-align:left;background:var(--surface);border:1px solid var(--border);"
@@ -2203,16 +2234,16 @@ export default class PulseLogic extends DCLogic {
       triage: triageGroups,
       triageEmpty: attentionItems.length === 0,
       attentionKpis: [
-        ["Failed", String(attentionItems.filter(e => e.status === "failed").length), "queued, nothing lost", RED],
-        ["Awaiting your yes", String(attentionItems.filter(e => e.status === "awaiting").length), "drafted, never sent", AMBER],
-        ["Oldest wait", attentionItems.length ? shortAgo(attentionItems[0].at) : "—", "since it was raised", "#6ad0f0"],
-        ["Retried automatically", "12", "cleared without you", LIME]
+        ["Detected", String(attentionItems.filter(e => e.status === "detected").length), "flagged by agents", RED],
+        ["Drafts and approvals", String(attentionItems.filter(e => e.status === "awaiting" || e.status === "draft").length), "prepared, never sent", AMBER],
+        ["Oldest wait", attentionItems.length ? shortAgo(attentionItems[0].at) : "None", "since it was raised", "#6ad0f0"],
+        ["Simulated outcomes", String(allEvents.filter(e => e.status === "simulated" || e.status === "approved").length), "recorded in the demo", LIME]
       ].map((k, ki) => ({label:k[0], value:k[1], hint:k[2], dot:k[3],
         valueColor: k[3] === RED || k[3] === AMBER ? k[3] : INK,
         style: "padding:15px 17px 17px;border-radius:var(--card-r,18px);text-align:left;background:var(--surface);border:1px solid var(--border);"
           + "backdrop-filter:blur(20px);animation:springIn .5s var(--ease) " + (ki * 70) + "ms both"})),
       agentKpis: [
-        ["Actions today", "318", "through granted tools", LIME],
+        ["Agent events", String(feeds.ai.length), "in the demo log", LIME],
         ["Working now", String(solo.filter(a => a.state === "working" || a.state === "thinking").length) + " of " + solo.length, "the rest are idle", "#6ad0f0"],
         ["Waiting on your yes", String(solo.filter(a => a.state === "waiting").length), "drafted, never sent", AMBER],
         ["Needs attention", String(solo.filter(a => a.state === "attention").length), "failed or blocked", RED]
@@ -2230,10 +2261,10 @@ export default class PulseLogic extends DCLogic {
         + (st.actPaused ? "background:var(--accent);border:1px solid var(--accent);color:var(--on-accent)"
                         : "background:var(--chip);border:1px solid var(--chip-border);color:var(--body)"),
       kpis: [
-        ["Events today", "1,284", "all", "across every source", LIME],
-        ["Employees active", "42", "people", "of 48 with access", "#f0c04b"],
-        ["AI actions", "318", "ai", "by " + solo.length + " installed agents", "#6ad0f0"],
-        ["Need attention", "7", "attention", "failed or awaiting a yes", RED]
+        ["Events", String(allEvents.length), "all", "simulated, from the demo log", LIME],
+        ["People", String(feeds.people.length), "people", "actions by 4 demo profiles", "#f0c04b"],
+        ["Agent events", String(feeds.ai.length), "ai", "by " + solo.length + " agents", "#6ad0f0"],
+        ["Need attention", String(attentionItems.length), "attention", "detected, drafted or awaiting", RED]
       ].map((k, ki) => {
         const on = st.actKpi === k[2];
         return {label:k[0], value:k[1], hint:k[3], dot:k[4],
@@ -2251,7 +2282,7 @@ export default class PulseLogic extends DCLogic {
         const items = (feeds[d.id] || []).filter(kpiMatch);
         const hovered = st.actHover === d.id;
         return {title:d.title, sub:d.sub, icon:d.icon, tint:d.tint, delay: (di * 110) + "ms",
-          state: st.actPaused ? "PAUSED" : hovered ? "HELD" : "LIVE",
+          state: st.actPaused ? "PAUSED" : hovered ? "HELD" : "DEMO LOG",
           stateColor: st.actPaused || hovered ? "var(--faint)" : d.tint,
           empty: items.length === 0,
           enter: () => this.setState({actHover:d.id}),
@@ -2313,9 +2344,9 @@ export default class PulseLogic extends DCLogic {
             {k:"WHEN", v: new Date(openEvent.at).toLocaleTimeString("en-IE")},
             {k:"EVENT ID", v: openEvent.id.toUpperCase()}],
           hasDiff: openEvent.stream === "people" || openEvent.stream === "data",
-          diff: [{field:"Status", before:"active", after:"on stop"},
-            {field:"Credit limit", before:"€20,000", after:"€20,000"},
-            {field:"Billing email", before:"—", after:"accounts@dunneandsons.ie"}],
+          diff: [{field:"Status", before:"Pending", after:"Updated in demo"},
+            {field:"Source", before:"None", after:openEvent.src},
+            {field:"Record", before:openEvent.rel, after:openEvent.rel}],
           related: [openEvent.rel, openEvent.actor, openEvent.src],
           audit: "Written to the event log · immutable · " + openEvent.id.toUpperCase(),
           canUndo: openEvent.stream === "people" && openEvent.status === "completed"};
@@ -2325,8 +2356,8 @@ export default class PulseLogic extends DCLogic {
     const g = this.graph, live = this.searches || [];
     const PHASE_WORD = {sweep:"expanding", path:"tracing", hold:"matched", fade:"clearing"};
     const graphModel = {
-      nodeCount: g ? g.nodes.length.toLocaleString("en-IE") : "—",
-      edgeCount: g ? g.edges.length.toLocaleString("en-IE") : "—",
+      nodeCount: g ? g.nodes.length.toLocaleString("en-IE") : "-",
+      edgeCount: g ? g.edges.length.toLocaleString("en-IE") : "-",
       running: live.filter(s => s.delay <= 0).length + " OF " + live.length,
       queries: live.map((s, i) => {
         const settled = Math.min(s.order.length, Math.floor(s.reveal));
@@ -2345,7 +2376,7 @@ export default class PulseLogic extends DCLogic {
         count: g ? String((this._legendCounts || (this._legendCounts = (() => {
           const c = new Array(CLUSTERS.length).fill(0);
           for (const nd of g.nodes) if (nd.kind !== "core" && nd.cluster >= 0) c[nd.cluster]++;
-          return c; })()))[i]) : "—"}))
+          return c; })()))[i]) : "-"}))
     };
 
     const oq = st.ontoQuery || "", ontoSearchRes = st.ontoResult;
@@ -2361,7 +2392,7 @@ export default class PulseLogic extends DCLogic {
       fromLabel: ontoSearchRes ? ontoSearchRes.from : "", toLabel: ontoSearchRes ? ontoSearchRes.to : "",
       hopsLabel: ontoSearchRes && ontoSearchRes.hops != null ? ontoSearchRes.hops + " hop" + (ontoSearchRes.hops === 1 ? "" : "s") + " between records" : "",
       connectedLabel: ontoSearchRes && ontoSearchRes.connected
-        ? (ontoSearchRes.connected.length ? "Also connected to " + ontoSearchRes.connected.join(", ") : "No other clusters reached this time — try again")
+        ? (ontoSearchRes.connected.length ? "Also connected to " + ontoSearchRes.connected.join(", ") : "No other clusters reached this time. Try again")
         : ""
     };
 
@@ -2420,7 +2451,7 @@ export default class PulseLogic extends DCLogic {
       cats: REC_TEMPLATE_CATS.map(c => {
         const on = (st.newRecCat || "All") === c;
         return {label:c,
-          style: "height:28px;padding:0 13px;border:0;border-radius:var(--r-ctl,9px);cursor:pointer;font-size:12px;white-space:nowrap;"
+          style: "height:28px;padding:0 13px;border:0;border-radius:var(--r-seg,7px);cursor:pointer;font-size:12px;white-space:nowrap;"
             + "transition:background .16s var(--ease),color .16s var(--ease);"
             + (on ? "background:var(--pill-bg);color:var(--pill-ink);font-weight:600;box-shadow:0 2px 5px rgba(0,0,0,.34),0 6px 16px rgba(0,0,0,.22),inset 0 1px 0 rgba(255,255,255,.5);" : "background:none;color:" + DIM),
           pick: () => this.setState({newRecCat:c})};
@@ -2455,9 +2486,13 @@ export default class PulseLogic extends DCLogic {
     const aq = st.agentQuery.trim().toLowerCase();
     const agentMatches = st.agents.filter(a => !aq || (a.name + " " + a.role + " " + a.preview).toLowerCase().indexOf(aq) > -1);
     const activeAgent = st.agents.find(a => a.id === st.agentId) || st.agents[0];
-    const activeThread = activeAgent.thread.concat(st.agentExtra[activeAgent.id] || []);
+    const agentHistory = jodzState().activity.filter(e => e.actor === activeAgent.name).slice(0, 6);
+    const activeThread = activeAgent.thread
+      .concat(agentHistory.length ? [{kind:"stamp", text:"Activity history"}, {kind:"agent", text:"what i have done, and where it stands:",
+        lines: agentHistory.map(e => ({k:e.outcome, v:e.title + " · " + e.at.slice(5)}))}] : [])
+      .concat(st.agentExtra[activeAgent.id] || []);
 
-    const segStyle = (active) => "display:flex;align-items:center;gap:7px;height:30px;padding:0 14px;border:0;border-radius:var(--r-ctl,11px);cursor:pointer;font-size:12.5px;white-space:nowrap;"
+    const segStyle = (active) => "display:flex;align-items:center;gap:7px;height:30px;padding:0 14px;border:0;border-radius:var(--r-seg,7px);cursor:pointer;font-size:12.5px;white-space:nowrap;"
       + "transition:background .24s var(--ease),color .24s var(--ease),font-weight .24s var(--ease);"
       + (active ? "background:var(--pill-bg);color:var(--pill-ink);font-weight:500;box-shadow:0 2px 5px rgba(0,0,0,.34),0 6px 16px rgba(0,0,0,.22),inset 0 1px 0 rgba(255,255,255,.5);" : "background:none;color:var(--dim)");
     // active/inactive are booleans the template branches on — a changed style string
@@ -2480,19 +2515,12 @@ export default class PulseLogic extends DCLogic {
       });
     };
     const inboxKeys = openKeys.filter(k => st.inboxFilter === "All" || ITEMS[k].group === st.inboxFilter);
-    const pillStyle = (active) => "height:30px;padding:0 15px;border:0;border-radius:var(--r-ctl,9px);cursor:pointer;font-size:12.5px;white-space:nowrap;transition:background .24s var(--ease),color .24s var(--ease);"
+    const pillStyle = (active) => "height:30px;padding:0 15px;border:0;border-radius:var(--r-seg,7px);cursor:pointer;font-size:12.5px;white-space:nowrap;transition:background .24s var(--ease),color .24s var(--ease);"
       + (active ? "background:var(--pill-bg);color:var(--pill-ink);font-weight:500;box-shadow:0 2px 5px rgba(0,0,0,.34),0 6px 16px rgba(0,0,0,.22),inset 0 1px 0 rgba(255,255,255,.5);" : "background:none;color:var(--dim)");
 
-    const TASKS = [
-      {id:"t1", title:"Chase INV-10428 — Dunne & Sons", due:"09:30", who:"AN", queue:["mine","overdue"], subject:"Dunne & Sons Ltd", priority:"high", late:true},
-      {id:"t2", title:"Reassign Van 04 jobs off Ballincollig", due:"11:00", who:"MK", queue:["mine","overdue"], subject:"Ballincollig depot", priority:"high", late:true},
-      {id:"t3", title:"Approve purchase order PO-4471", due:"12:00", who:"MK", queue:["mine"], subject:"PO-4471", priority:"normal"},
-      {id:"t4", title:"Call Casey Builders about Thursday", due:"14:00", who:"TW", queue:["mine","team"], subject:"Casey Builders", priority:"normal"},
-      {id:"t5", title:"Sign off August counter stocktake", due:"16:30", who:"SB", queue:["team"], subject:"Head office", priority:"low"},
-      {id:"t6", title:"Assign installer to Thursday depot visit", due:"Tomorrow", who:"—", queue:["unassigned","upcoming"], subject:"site-visits.visit", priority:"high"},
-      {id:"t7", title:"VAT return — August", due:"Fri", who:"AN", queue:["team","upcoming"], subject:"Head office", priority:"normal"},
-      {id:"t8", title:"Ballincollig lease decision", due:"Thu", who:"MK", queue:["mine","upcoming"], subject:"Ballincollig depot", priority:"high"}
-    ];
+    const TASKS = jodzTasks().filter(t => t.status !== "Done").map(t => ({id:t.id, title:t.title, due:t.dueLabel, who:t.whoInitials,
+      queue:["mine","team"].concat(t.late ? ["overdue"] : []).concat(t.due <= "2026-10-03" ? ["upcoming"] : []), subject:linkLabelOf(t.link),
+      priority:t.priority.toLowerCase() === "medium" ? "normal" : t.priority.toLowerCase(), late:t.late}));
     const decorateTask = (t) => {
       const done = !!st.done[t.id];
       return Object.assign({}, t, {
@@ -2524,104 +2552,41 @@ export default class PulseLogic extends DCLogic {
     }));
     const queueTasks = (st.queue === "all" ? TASKS : TASKS.filter(t => t.queue.includes(st.queue))).map(decorateTask);
 
-    const APPROVALS = [
-      {id:"a1", title:"Purchase order PO-4471 — €14,280", subject:"Munster Plumbing Supplies · raised by Aoife Nolan", age:"18m", status:"awaiting you",
-       steps:[{who:"Aoife Nolan",state:"raised 08:54",dot:GREEN},{who:"Martin Kilbride",state:"pending",dot:AMBER}],
-       work:{kind:"table", label:"PURCHASE ORDER", viewLabel:"View order",
-         headline:"PO-4471 · Munster Plumbing Supplies", sub:"Delivery Thursday 18 Sep · terms 30 days",
-         cols:["Line","Qty","Unit","Total"], align:["left","right","right","right"],
-         rows:[["22mm copper tube — 3m","240","€38.40","€9,216.00"],
-               ["Compression elbow 22mm","400","€4.10","€1,640.00"],
-               ["Solder ring coupler 22mm","600","€2.85","€1,710.00"],
-               ["Flux paste 350g","60","€28.57","€1,714.00"]],
-         totals:[["Net","€14,280.00"],["VAT 23% (reverse charge)","€0.00"],["Payable","€14,280.00"]],
-         thinking:[["Checked stock levels","All four lines are below reorder point"],
-                   ["Matched pricing","Unit prices equal the June supplier agreement"],
-                   ["Checked commitments","Three lines are committed to Thursday's jobs"],
-                   ["Checked threshold","€4,280 over Martin's sign-off limit, so it routed here"]],
-         tools:[["records.read","read"],["invoices.read","read"],["approvals.route","write"]],
-         risk:"No alternative supplier quote on file. Last price change was 14 June."}},
-      {id:"a2", title:"Credit limit increase — Casey Builders", subject:"€10,000 → €18,000 · raised by Niamh Cronin", age:"Yesterday", status:"awaiting you",
-       steps:[{who:"Niamh Cronin",state:"raised 16:02",dot:GREEN},{who:"Aoife Nolan",state:"approved 16:40",dot:GREEN},{who:"Martin Kilbride",state:"pending",dot:AMBER}],
-       work:{kind:"diff", label:"RECORD CHANGE", viewLabel:"View change",
-         headline:"Casey Builders Ltd · account CB-0142", sub:"Three fields change on approval, one unchanged",
-         diff:[["Credit limit","€10,000","€18,000"],["Terms","30 days","45 days"],["Risk band","B","B"],["Reviewed","14 Mar 2026","Today"]],
-         thinking:[["Read payment history","24 invoices, 22 paid on time, average 27 days"],
-                   ["Checked exposure","Current balance €7,400 — 74% of the existing limit"],
-                   ["Checked open work","€21k of quoted work would be blocked by the current limit"],
-                   ["Checked policy","Increases above €15,000 need your decision"]],
-         tools:[["records.read","read"],["invoices.read","read"],["records.update","write"]],
-         risk:"One late payment in February, 19 days over. Cleared in full."}},
-      {id:"a4", title:"Proposal — Ballincollig retrofit €62,400", subject:"Drafted by Helios · raised by Niamh Cronin", age:"3h", status:"awaiting you",
-       steps:[{who:"Niamh Cronin",state:"raised 06:10",dot:GREEN},{who:"Martin Kilbride",state:"pending",dot:AMBER}],
-       work:{kind:"doc", label:"PROPOSAL · 4 PAGES", viewLabel:"Read proposal",
-         headline:"Heating retrofit — Ballincollig depot", sub:"Prepared for Casey Builders Ltd · valid 30 days",
-         doc:[["Scope","Replace the depot's two oil boilers with a cascaded air-source system, re-balance the existing circuit and fit weather compensation controls. Work is phased over two weekends so the yard keeps running."],
-              ["Approach","Week one strips the plant room and lands the new units on the existing plinth. Week two commissions the cascade and hands over with a 12-month monitoring window."],
-              ["Commercials","€62,400 fixed price, 30% on order, 40% on plant delivery, 30% on handover. Excludes making good to the render."],
-              ["Why us","We hold the maintenance contract on the Glanmire site and carry the same plant in stock, so lead time is three weeks rather than nine."]],
-         totals:[["Plant","€38,900.00"],["Labour","€18,100.00"],["Controls and commissioning","€5,400.00"],["Total","€62,400.00"]],
-         thinking:[["Pulled the site record","Two oil boilers, 2009, last serviced March"],
-                   ["Priced from live stock","Plant is in stock at the Cork branch"],
-                   ["Reused past wording","Lifted scope language from the Glanmire proposal you approved"],
-                   ["Left a gap","No allowance for asbestos survey — flagged below"]],
-         tools:[["records.read","read"],["files.read","read"],["email.send","external"]],
-         risk:"No asbestos survey allowance. If the plant room needs one, add roughly €1,200."}},
-      {id:"a5", title:"Payment run — 14 suppliers €48,920", subject:"Scheduled by Cash Watch · Friday 19 Sep", age:"1h", status:"awaiting you",
-       steps:[{who:"Cash Watch",state:"proposed 09:40",dot:GREEN},{who:"Martin Kilbride",state:"pending",dot:AMBER}],
-       work:{kind:"table", label:"PAYMENT RUN", viewLabel:"View run",
-         headline:"Run PR-0238 · 14 payments", sub:"Leaves the AIB current account on Friday 19 Sep",
-         cols:["Supplier","Due","Invoices","Amount"], align:["left","left","right","right"],
-         rows:[["Munster Plumbing Supplies","19 Sep","3","€18,240.00"],
-               ["Tyrrell Insulation","19 Sep","1","€9,110.00"],
-               ["Kelleher Haulage","20 Sep","4","€7,480.00"],
-               ["Cork Electrical Wholesale","19 Sep","2","€6,300.00"],
-               ["10 others","19–24 Sep","11","€7,790.00"]],
-         totals:[["Run total","€48,920.00"],["Account balance after","€61,380.00"],["Held back","€2,410.00"]],
-         thinking:[["Read the ledger","31 invoices due inside seven days"],
-                   ["Held two back","Tyrrell credit note unresolved, Dineen job in dispute"],
-                   ["Checked the balance","Run leaves €61,380, above your €50k floor"],
-                   ["Checked mandates","All 14 have current SEPA mandates on file"]],
-         tools:[["invoices.read","read"],["payments.read","read"],["bank.payment.create","external"]],
-         risk:"Two invoices held back total €2,410. They will age past 60 days if not paid next run."}},
-      {id:"a3", title:"Write-off — INV-10233 €412", subject:"Glanmire Mechanical · raised by Aoife Nolan", age:"2 days", status:"approved",
-       steps:[{who:"Aoife Nolan",state:"raised",dot:GREEN},{who:"Martin Kilbride",state:"approved",dot:GREEN}],
-       work:{kind:"diff", label:"WRITE-OFF", viewLabel:"View write-off",
-         headline:"INV-10233 · Glanmire Mechanical", sub:"Two fields change on approval",
-         diff:[["Status","Past due 94 days","Written off"],["Balance","€412.00","€0.00"]],
-         thinking:[["Checked the age","94 days past due, three chases sent"],
-                   ["Checked the account","Company dissolved 12 August"],
-                   ["Checked the amount","Below your €500 write-off threshold"]],
-         tools:[["invoices.read","read"],["invoices.update","write"]],
-         risk:"None. The counterparty no longer exists."}}
-    ];
-    const bucketOf = (a) => a.status === "approved" ? "Decided"
-      : a.steps.some(s => s.state === "pending" && s.who === "Martin Kilbride") ? "Awaiting you" : "Awaiting others";
+    const APPROVALS = jodzState().approvals.map(ap => {
+      const waiting = ap.status === "Awaiting approval";
+      return {id:ap.id, title:ap.title + " · " + ap.value, subject:ap.kind + " · raised by " + ap.requestedBy, age: ap.raised.slice(5).split("-").reverse().join("/"),
+        status: waiting ? "awaiting you" : ap.status === "Declined" ? "declined" : "approved in demo",
+        steps:[{who:ap.requestedBy, state:"raised " + ap.raised.slice(5).split("-").reverse().join("/"), dot:GREEN},
+               {who:"Aoibhe Dunleavy", state: waiting ? "pending" : ap.status.toLowerCase(), dot: waiting ? AMBER : GREEN}],
+        work:{viewLabel:"Open"}, _ap:ap};
+    });
+    const bucketOf = (a) => a._ap.status === "Awaiting approval" ? "Awaiting you" : "Decided";
     const APPROVAL_COUNTS = {"Awaiting you":0, "Awaiting others":0, "Decided":0};
-    APPROVALS.filter(a => !st.approved[a.id]).forEach(a => { APPROVAL_COUNTS[bucketOf(a)] += 1; });
+    APPROVALS.forEach(a => { APPROVAL_COUNTS[bucketOf(a)] += 1; });
     const approvalView = st.workViews.approvals || "Awaiting you";
     const pendingApprovals = APPROVAL_COUNTS["Awaiting you"];
-    const approvalRows = APPROVALS.filter(a => !st.approved[a.id] && bucketOf(a) === approvalView).map(a => Object.assign({}, a, {
+    const approvalRows = APPROVALS.filter(a => bucketOf(a) === approvalView).map(a => Object.assign({}, a, {
       statusStyle: "padding:3px 10px;border-radius:var(--r-sm,9px);font-size:11px;"
-        + (a.status === "approved" ? "background:var(--ok-soft);color:" + GREEN : "background:var(--warn-soft);color:" + AMBER),
-      pending: a.status !== "approved",
-      viewLabel: a.work.viewLabel,
-      openWork: () => this.setState({workDoc:a.id, workDocTab:"work"}),
-      approve: () => this.setState(prev => ({approved: Object.assign({}, prev.approved, {[a.id]:true})}))
+        + (a.status !== "awaiting you" ? "background:var(--ok-soft);color:" + GREEN : "background:var(--warn-soft);color:" + AMBER),
+      pending: a.status === "awaiting you",
+      viewLabel: "Open " + linkLabelOf(a._ap.link),
+      openWork: () => jodzOpenDrawer("approval", a.id),
+      approve: () => jodzDecide(a.id, true),
+      decline: () => jodzDecide(a.id, false)
     }));
     const WORK_COUNTS = {
-      tasks: st.addedTasks.concat(WORK_TASKS).filter(t => !(st.done[t.id] !== undefined ? st.done[t.id] : t.done)).length,
-      approvals: APPROVALS.filter(a => !st.approved[a.id] && bucketOf(a) === "Awaiting you").length,
+      tasks: openWork.length,
+      approvals: APPROVALS.filter(a => bucketOf(a) === "Awaiting you").length,
       workflows: OPS_DEFS.filter(w => w.kind !== "task" && (st.opsOff[w.id] === undefined ? w.on : !st.opsOff[w.id])).length,
       schedules: OPS_DEFS.filter(w => w.triggerKind === "schedule").length
     };
-    const approvals = APPROVALS.filter(a => !st.approved[a.id] && bucketOf(a) === st.approvalFilter).map(a => Object.assign({}, a, {
-      pending: a.status !== "approved",
-      statusBg: a.status === "approved" ? "var(--ok-soft)" : "var(--warn-soft)",
-      statusColor: a.status === "approved" ? GREEN : AMBER,
-      viewLabel: a.work.viewLabel,
-      openWork: () => this.setState({workDoc:a.id, workDocTab:"work"}),
-      approve: () => this.setState({approved:Object.assign({}, st.approved, {[a.id]:true})})
+    const approvals = APPROVALS.filter(a => bucketOf(a) === st.approvalFilter).map(a => Object.assign({}, a, {
+      pending: a.status === "awaiting you",
+      statusBg: a.status !== "awaiting you" ? "var(--ok-soft)" : "var(--warn-soft)",
+      statusColor: a.status !== "awaiting you" ? GREEN : AMBER,
+      viewLabel: "Open",
+      openWork: () => jodzOpenDrawer("approval", a.id),
+      approve: () => jodzDecide(a.id, true)
     }));
 
     /* An approval is a decision about a piece of work, so the work itself has
@@ -2643,8 +2608,8 @@ export default class PulseLogic extends DCLogic {
       let kindIcon = "M6 3.5h9l3.5 3.5v13.5H6Z M15 3.5V7h3.5";
       if (w.kind === "table"){
         facts = [["Lines", String((w.rows || []).length)],
-                 ["Value", lastTotal ? lastTotal[1] : "—"],
-                 ["Terms", (w.sub || "").split(" · ").slice(-1)[0] || "—"]];
+                 ["Value", lastTotal ? lastTotal[1] : "-"],
+                 ["Terms", (w.sub || "").split(" · ").slice(-1)[0] || "-"]];
         kindIcon = "M4 6.5h16 M4 12h16 M4 17.5h16 M9 4v16";
       } else if (w.kind === "diff"){
         facts = [["Fields changing", String(changed.length)]]
@@ -2652,7 +2617,7 @@ export default class PulseLogic extends DCLogic {
         kindIcon = "M4 8h9l-2.5-2.5 M20 16h-9l2.5 2.5";
       } else if (w.kind === "doc"){
         facts = [["Sections", String((w.doc || []).length)],
-                 ["Value", lastTotal ? lastTotal[1] : (wDoc.title.match(/€[\d,\.]+/) || ["—"])[0]],
+                 ["Value", lastTotal ? lastTotal[1] : (wDoc.title.match(/€[\d,\.]+/) || ["-"])[0]],
                  ["Prepared by", (wDoc.subject || "").indexOf("Helios") > -1 ? "Agent draft" : "Team"]];
         kindIcon = "M6 3.5h9l3.5 3.5v13.5H6Z M15 3.5V7h3.5 M9 12h6 M9 16h4";
       }
@@ -2759,15 +2724,14 @@ export default class PulseLogic extends DCLogic {
          cardBg:"var(--surface)", cardBorder:"var(--track)", ink:INK, bars:bars([.4,.5,.44,.6,.5,.55,.48,.6,.5,.45], AMBER)}
        ],
        breakdown:[
-        {key:"Head office", value:money(214600), pct:"72%", color:LIME},
-        {key:"Ballincollig depot", value:money(156800), pct:"53%", color:"var(--track)"},
-        {key:"Mallow yard", value:money(41400), pct:"18%", color:"var(--track)"}
+        {key:"Online", value:money(18000), pct:"75%", color:LIME},
+        {key:"Wholesale", value:money(6000), pct:"25%", color:"var(--track)"}
        ]},
       {title:"site-visits", description:"Contributed by an installed module.", hasBreakdown:false,
        metrics:[
         {label:"Visits completed", value:String(Math.round(38*scale)), change:"+11%", changeColor:delta("up"), hint:"vs previous "+rangeLabel,
          cardBg:"var(--surface)", cardBorder:"var(--track)", ink:INK, bars:bars([.4,.5,.6,.5,.66,.6,.72,.66,.8,.9], LIME)},
-        {label:"Unassigned", value:"1", change:"—", changeColor:delta("flat"), hint:"Thursday 09:00",
+        {label:"Unassigned", value:"1", change:"-", changeColor:delta("flat"), hint:"Thursday 09:00",
          cardBg:"var(--surface)", cardBorder:"var(--warn-soft)", ink:INK, bars:bars([.2,.3,.2,.4,.3,.25,.2,.3,.25,.4], AMBER)},
         {label:"Average duration", value:"1h 48m", change:"−6m", changeColor:delta("up"), hint:"across completed visits",
          cardBg:"var(--surface)", cardBorder:"var(--track)", ink:INK, bars:bars([.6,.55,.6,.5,.55,.48,.5,.46,.44,.4], LIME)},
@@ -2780,71 +2744,72 @@ export default class PulseLogic extends DCLogic {
     const runs = (pattern) => pattern.map(p => ({bg:runBar(p), label:p}));
     const automations = [
       {name:"Overdue invoice reminder", state:"live", stateBg:"var(--ok-soft)", stateColor:GREEN,
-       trigger:"schedule · daily 08:00", actions:[{label:"notify.email", border:"var(--bad-soft)", color:AMBER},{label:"tasks.create", border:"var(--track)", color:BODY}],
-       lastRun:"Today 08:00", result:"6 of 10 sent · partial", resultColor:AMBER, hasRuns:true, runSummary:"11 ok · 3 partial",
-       runs:runs(["ok","ok","partial","ok","ok","ok","partial","ok","ok","ok","ok","ok","partial","partial"])},
-      {name:"Approval routing over €10k", state:"live", stateBg:"var(--ok-soft)", stateColor:GREEN,
-       trigger:"event · core.approval.created", actions:[{label:"approvals.route", border:"var(--track)", color:BODY},{label:"notify.inbox", border:"var(--track)", color:BODY}],
-       lastRun:"Today 08:54", result:"ok", resultColor:GREEN, hasRuns:true, runSummary:"14 ok",
+       trigger:"schedule · weekdays 09:00", actions:[{label:"reminder.draft", border:"var(--track)", color:BODY},{label:"approval.request", border:"var(--track)", color:BODY}],
+       lastRun:"Today 06:45", result:"1 drafted · 0 sent", resultColor:AMBER, hasRuns:true, runSummary:"demo runs, simulated",
+       runs:runs(["idle","idle","idle","idle","idle","idle","idle","idle","idle","idle","idle","ok","ok","partial"])},
+      {name:"Wholesale shortage watch", state:"live", stateBg:"var(--ok-soft)", stateColor:GREEN,
+       trigger:"event · order confirmed or stock moved", actions:[{label:"tasks.create", border:"var(--track)", color:BODY}],
+       lastRun:"Today 06:41", result:"1 shortage", resultColor:AMBER, hasRuns:true, runSummary:"demo runs, simulated",
        runs:runs(["ok","ok","ok","ok","ok","ok","ok","ok","ok","ok","ok","ok","ok","ok"])},
-      {name:"Unassigned visit escalation", state:"live", stateBg:"var(--ok-soft)", stateColor:GREEN,
-       trigger:"event · site-visits.visit.created", actions:[{label:"notify.inbox", border:"var(--track)", color:BODY}],
-       lastRun:"Today 07:00", result:"ok", resultColor:GREEN, hasRuns:true, runSummary:"9 ok · 1 failed",
-       runs:runs(["idle","idle","ok","ok","failed","ok","ok","ok","idle","ok","ok","ok","ok","ok"])},
-      {name:"Xero invoice sync", state:"failing", stateBg:"var(--bad-soft)", stateColor:RED,
-       trigger:"schedule · hourly", actions:[{label:"xero.post", border:"var(--bad-soft)", color:RED}],
-       lastRun:"Today 02:14", result:"invalid_grant · dead-lettered", resultColor:RED, hasRuns:true, runSummary:"4 failed",
-       runs:runs(["ok","ok","ok","ok","ok","ok","ok","ok","ok","ok","failed","failed","failed","failed"])}
+      {name:"Shopify order sync", state:"live", stateBg:"var(--ok-soft)", stateColor:GREEN,
+       trigger:"schedule · hourly (demo connection)", actions:[{label:"shopify.orders.read", border:"var(--track)", color:BODY}],
+       lastRun:"Today 06:00", result:"simulated data", resultColor:GREEN, hasRuns:true, runSummary:"simulated",
+       runs:runs(["ok","ok","ok","ok","ok","ok","ok","ok","ok","ok","ok","ok","ok","ok"])}
     ];
 
     const health = [
-      {label:"Events waiting", value:"12", hint:"oldest 4 minutes ago", color:INK, border:"var(--track)"},
-      {label:"Being processed", value:"3", hint:"claimed by a worker", color:INK, border:"var(--track)"},
-      {label:"Dead letters", value:"2", hint:"gave up after retrying", color:RED, border:"var(--bad-soft)"},
-      {label:"Failed deliveries", value:"5", hint:"across 2 subscribers", color:AMBER, border:"var(--warn-soft)"}
+      {label:"Events waiting", value:"0", hint:"demo queue", color:INK, border:"var(--track)"},
+      {label:"Drafts awaiting a person", value:"3", hint:"reminder, purchase, partial dispatch", color:AMBER, border:"var(--warn-soft)"},
+      {label:"Live connections", value:"0", hint:"all integrations are simulated", color:INK, border:"var(--track)"},
+      {label:"Failed runs", value:"0", hint:"last 14 days", color:INK, border:"var(--track)"}
     ];
     const failures = [
-      {name:"Xero invoice sync", status:"failed", error:"invalid_grant: refresh token expired", at:"02:14", tagBg:"var(--bad-soft)", tagColor:RED},
-      {name:"Overdue invoice reminder", status:"partial", error:"notify.email: 4 records missing billing_email", at:"08:00", tagBg:"var(--warn-soft)", tagColor:AMBER},
-      {name:"Unassigned visit escalation", status:"failed", error:"notify.inbox: actor has no grant for core:notification:create", at:"Mon", tagBg:"var(--bad-soft)", tagColor:RED}
+      {name:"Overdue invoice reminder", status:"partial", error:"reminder drafted, sending is not connected in the demo", at:"06:45", tagBg:"var(--warn-soft)", tagColor:AMBER}
     ];
     const calls = [
-      {tool:"xero.invoices.post", status:"failed", ms:"1,204 ms", at:"02:14", tagBg:"var(--bad-soft)", tagColor:RED},
-      {tool:"whatsapp.messages.send", status:"ok", ms:"412 ms", at:"07:02", tagBg:"var(--ok-soft)", tagColor:GREEN},
-      {tool:"resend.email.send", status:"ok", ms:"286 ms", at:"08:00", tagBg:"var(--ok-soft)", tagColor:GREEN},
-      {tool:"resend.email.send", status:"failed", ms:"94 ms", at:"08:00", tagBg:"var(--bad-soft)", tagColor:RED},
-      {tool:"anthropic.messages", status:"ok", ms:"2,940 ms", at:"09:11", tagBg:"var(--ok-soft)", tagColor:GREEN}
+      {tool:"shopify.orders.read (simulated)", status:"ok", ms:"demo", at:"06:00", tagBg:"var(--ok-soft)", tagColor:GREEN},
+      {tool:"stock.variants.read", status:"ok", ms:"demo", at:"06:40", tagBg:"var(--ok-soft)", tagColor:GREEN},
+      {tool:"invoices.reminder.draft", status:"ok", ms:"demo", at:"06:45", tagBg:"var(--ok-soft)", tagColor:GREEN},
+      {tool:"csv.import.preview", status:"ok", ms:"demo", at:"Fri", tagBg:"var(--ok-soft)", tagColor:GREEN}
     ];
 
     const modules = [
       {label:"Pulse Core", id:"core", version:"0.1.0", state:"always installed", bg:"var(--surface)", border:"var(--track)",
        stateBg:"var(--track)", stateColor:BODY,
-       description:"People, organisations, locations, teams and the relationships between them — registered through the same contract a module uses.",
-       contributions:[{n:"31",k:"routes"},{n:"10",k:"nav items"},{n:"21",k:"events"},{n:"7",k:"predicates"},{n:"64",k:"permissions"}]},
-      {label:"Site visits", id:"site-visits", version:"1.0.0", state:"installed", bg:"var(--accent-faint)", border:"var(--accent-line)",
+       description:"People, organisations, tasks, approvals, files and the relationships between them.",
+       contributions:[{n:"4",k:"demo users"},{n:"4",k:"agents"},{n:"7",k:"workflows"}]},
+      {label:"Sales & Wholesale", id:"wholesale", version:"demo", state:"installed", bg:"var(--accent-faint)", border:"var(--accent-line)",
        stateBg:"var(--accent-soft)", stateColor:LIME,
-       description:"The fixture that proves the architecture holds: an entity with a real table, a predicate, two Helios tools, a metric, an event, a trigger, a page and a nav item. Not one line of core changes to install it.",
-       contributions:[{n:"1",k:"entity"},{n:"2",k:"helios tools"},{n:"4",k:"metrics"},{n:"1",k:"predicate"},{n:"1",k:"trigger"}]},
-      {label:"UI showcase", id:"ui-showcase", version:"0.1.0", state:"installed", bg:"var(--surface)", border:"var(--track)",
+       description:"Online and wholesale sales on one page, wholesale orders with size and colour grids, allocation and simulated dispatch.",
+       contributions:[{n:"1",k:"page"},{n:"8",k:"retailers"},{n:"7",k:"orders"}]},
+      {label:"Inventory", id:"inventory", version:"demo", state:"installed", bg:"var(--surface)", border:"var(--track)",
        stateBg:"var(--accent-soft)", stateColor:LIME,
-       description:"Component sheet, directory and record fixtures used to review the primitives before they reach a client build.",
-       contributions:[{n:"3",k:"pages"},{n:"1",k:"widget"},{n:"0",k:"tables"}]},
-      {label:"Wholesale", id:"wholesale", version:"—", state:"available", bg:"var(--surface-faint)", border:"var(--track)",
-       stateBg:"var(--track)", stateColor:FAINT,
-       description:"Orders, price lists, stock and purchase orders. One line in this client's config would add its pages, permissions, events and Helios tools.",
-       contributions:[{n:"6",k:"entities"},{n:"9",k:"helios tools"},{n:"12",k:"events"}]}
+       description:"Stock by product, colour and size, incoming purchase orders and returns.",
+       contributions:[{n:"40",k:"variants"},{n:"4",k:"purchase orders"},{n:"6",k:"returns"}]},
+      {label:"Trends", id:"trends", version:"demo", state:"installed", bg:"var(--surface)", border:"var(--track)",
+       stateBg:"var(--accent-soft)", stateColor:LIME,
+       description:"Trend spotting: search, social, own sales, returns and wholesale signals, a retail calendar, and signals that can be applied to the forecast. Search and social figures are a simulated index.",
+       contributions:[{n:"10",k:"signals"},{n:"6",k:"calendar moments"},{n:"1",k:"page"}]},
+      {label:"Advertising", id:"ads", version:"demo", state:"installed", bg:"var(--surface)", border:"var(--track)",
+       stateBg:"var(--accent-soft)", stateColor:LIME,
+       description:"Meta Ads and Google Ads in one dashboard, checked against Shopify revenue and live stock. Demo connections with simulated data; proposed changes are drafts only.",
+       contributions:[{n:"8",k:"campaigns"},{n:"5",k:"proposed changes"},{n:"1",k:"page"}]},
+      {label:"Accounting, Forecasting, Reporting", id:"finance", version:"demo", state:"installed", bg:"var(--surface)", border:"var(--track)",
+       stateBg:"var(--accent-soft)", stateColor:LIME,
+       description:"Operational view of invoices, bills and cash; demand and buying plan; four reports with CSV export. Not a ledger or tax product.",
+       contributions:[{n:"3",k:"pages"},{n:"4",k:"reports"}]}
     ];
 
     const notificationFeed = [
-      {dot:LIME, text:"Aoife Nolan assigned you “Approve purchase order PO-4471”", event:"core.approval.created", channel:"Inbox", meta:"18m"},
-      {dot:RED, text:"Xero invoice sync failed — refresh token expired", event:"core.automation.failed", channel:"Inbox · WhatsApp", meta:"6h"},
-      {dot:AMBER, text:"Helios flagged a change in Dunne & Sons payment behaviour", event:"core.notification.created", channel:"Inbox", meta:"2h"},
-      {dot:AMBER, text:"Thursday's depot visit is still unassigned", event:"site-visits.visit.created", channel:"Inbox", meta:"2h"},
-      {dot:NEUTRAL, text:"Séamus Byrne mentioned you on “Reassign Van 04 jobs”", event:"core.comment.created", channel:"Inbox", meta:"Yesterday"},
-      {dot:NEUTRAL, text:"Your daily briefing is ready", event:"core.briefing.sent", channel:"WhatsApp", meta:"07:00"}
+      {dot:RED, text:"Admiral Navy S: 6 available, about 2 days of cover", event:"Detected · Stock & Demand", channel:"Inbox", meta:"06:40"},
+      {dot:RED, text:"JOD-W1041 for Meadow Tack is 12 units short", event:"Detected · Ops Watchdog", channel:"Inbox", meta:"06:41"},
+      {dot:AMBER, text:"Reminder for JOD-INV2031 drafted, not sent", event:"Draft prepared · Finance & Cash", channel:"Inbox", meta:"06:45"},
+      {dot:AMBER, text:"PO-D193 (€10,800) is awaiting your approval", event:"Awaiting approval", channel:"Inbox", meta:"Fri"},
+      {dot:NEUTRAL, text:"Return RET-316 is waiting on a restock decision", event:"Simulated", channel:"Inbox", meta:"Fri"},
+      {dot:NEUTRAL, text:"Your morning briefing is ready", event:"Draft prepared · Briefing", channel:"Home", meta:"07:02"}
     ];
 
-    const FEATURES = [["approvals","Approvals"],["automations","Automations"],["insights","Insights"],["customEntities","Custom entities"],["whatsapp","WhatsApp channel"],["composio","Composio actions"]];
+    const FEATURES = [["approvals","Approvals"],["automations","Automations"],["insights","Insights"],["customEntities","Custom entities"],["whatsapp","Messaging channel (not connected)"],["composio","External actions (not connected)"]];
     const features = FEATURES.map(f => {
       const on = st.flags[f[0]];
 
@@ -2871,12 +2836,12 @@ export default class PulseLogic extends DCLogic {
       recents.length ? {group:"Recent", scope:"All", items:recents.slice(0, 3).map(r => ({title:r, meta:"Recent search", hint:"AGAIN", glyph:"recent",
         go: () => this.setState({query:r, palSel:0})}))} : null,
       {group:"Actions", scope:"Actions", items:[
-        {title:"Start a new Helios conversation", meta:"Clears the current thread", hint:"ACTION", glyph:"action",
+        {title:"Start a new conversation", meta:"Clears the current thread", hint:"ACTION", glyph:"action",
           go: () => { clearInterval(this._t); this.setState({page:"Home", thread:[], typed:0, draft:""}); }},
         {title:"Review approvals waiting on you", meta:"Work · approvals", hint:"ACTION", glyph:"action",
           go: () => this.setState({page:"Work", queue:"mine"})},
         {title:themeAction, meta:"Appearance", hint:"ACTION", glyph:"action",
-          go: () => this.setState(p => p.theme === "light" ? {theme: p.darkTheme || this.props.theme || "harbour"} : {theme:"light", darkTheme:p.theme})},
+          go: () => this.setState(p => p.theme === "light" ? {theme: p.darkTheme || this.props.theme || "jodz"} : {theme:"light", darkTheme:p.theme})},
         {title:"Open system health", meta:"Admin · modules and jobs", hint:"ACTION", glyph:"action",
           go: () => this.setState({page:"Settings"})}
       ]},
@@ -2954,7 +2919,7 @@ export default class PulseLogic extends DCLogic {
     };
     const KITS = {
       Home: [
-        {title:"Ask what changed today", meta:"Helios · briefing", icon:ICONS.helios, go: () => { clearInterval(this._t); this.setState({paletteOpen:false, query:"", page:"Home"}); this.ask("What changed today?"); }},
+        {title:"Ask what changed today", meta:"Briefing · demo answer", icon:ICONS.helios, go: () => { clearInterval(this._t); this.setState({paletteOpen:false, query:"", page:"Home"}); this.ask("What changed today?"); }},
         {title:"Action inbox", meta:openKeys.length + " waiting on you", icon:ICONS.inbox, go: jump("Home", {open:null})},
         {title:"Edit widgets", meta:"Rearrange the right rail", icon:ICONS.dash, go: jump("Home", {widgetEdit:true})},
         {title:"My work", meta:"Tasks due today", icon:ICONS.work, go: jump("Work", {queue:"mine"})}
@@ -2985,7 +2950,7 @@ export default class PulseLogic extends DCLogic {
       ],
       Activity: [
         {title:"Needs attention", meta:"Failures and retries", icon:ICONS.health, go: jump("Activity", {actKpi:"attention"})},
-        {title:"Agent events", meta:"Only what Helios did", icon:ICONS.agents, go: jump("Activity", {actKpi:"ai"})},
+        {title:"Agent events", meta:"Only what agents did", icon:ICONS.agents, go: jump("Activity", {actKpi:"ai"})},
         {title:"People events", meta:"Only what the team did", icon:ICONS.people, go: jump("Activity", {actKpi:"people"})},
         {title:"Everything", meta:"Full audit trail", icon:ICONS.navActivity, go: jump("Activity", {actKpi:"all"})}
       ],
@@ -2997,7 +2962,7 @@ export default class PulseLogic extends DCLogic {
       ]
     };
     const palPageRaw = KITS[page] || [
-      {title:"Ask Helios about this page", meta:"It sees what you see", icon:ICONS.helios, go: () => { this.setState({paletteOpen:false, query:"", page:"Home"}); this.ask("What should I know about " + page + "?"); }},
+      {title:"Ask about this page", meta:"Fixture answers from the demo data", icon:ICONS.helios, go: () => { this.setState({paletteOpen:false, query:"", page:"Home"}); this.ask("What should I know about " + page + "?"); }},
       {title:"Action inbox", meta:openKeys.length + " waiting on you", icon:ICONS.inbox, go: jump("Home")},
       {title:"My work", meta:"Tasks due today", icon:ICONS.work, go: jump("Work", {queue:"mine"})},
       {title:"Records", meta:"Every record you can see", icon:ICONS.navRecords, go: jump("Records")}
@@ -3005,16 +2970,19 @@ export default class PulseLogic extends DCLogic {
     const FREQ = [
       {title:"Action inbox", count:"31×", icon:ICONS.inbox, go: jump("Home")},
       {title:"Approvals", count:"24×", icon:ICONS.approvals, go: jump("Work", {workSection:"approvals"})},
-      {title:"Overdue invoices", count:"18×", icon:ICONS.insights, go: jump("Dashboard", {aspect:"cash"})},
-      {title:"Dunne & Sons Ltd", count:"12×", icon:ICONS.orgs, go: jump("Records", {recSection:"contacts", record:"org"})},
-      {title:"Month-end close", count:"9×", icon:ICONS.agents, go: jump("Agents", {agentId:"monthend"})},
-      {title:"Site visits", count:"7×", icon:ICONS.visits, go: jump("Work", {workSection:"schedules"})}
+      {title:"Cash Outlook", count:"18×", icon:ICONS.navBooks, go: () => { this.setState({paletteOpen:false, query:""}); jodzGoTo("Accounting", "cash"); }},
+      {title:"JOD-W1041 · Meadow Tack", count:"12×", icon:ICONS.navSales, go: () => { this.setState({paletteOpen:false, query:""}); jodzOpenRecord({kind:"order", id:"JOD-W1041"}); }},
+      {title:"Buying Plan", count:"9×", icon:ICONS.navForecast, go: () => { this.setState({paletteOpen:false, query:""}); jodzGoTo("Forecasting", "buying"); }},
+      {title:"Stock", count:"7×", icon:ICONS.navStock, go: () => { this.setState({paletteOpen:false, query:""}); jodzGoTo("Inventory", "stock"); }}
     ];
     const JUMPS = [
       {title:"Home", icon:ICONS.navHome, go: jump("Home")},
+      {title:"Sales & Wholesale", icon:ICONS.navSales, go: jump("Dashboard")},
+      {title:"Inventory", icon:ICONS.navStock, go: jump("Inventory")},
+      {title:"Trends", icon:ICONS.navTrends, go: jump("Trends")},
+      {title:"Advertising", icon:ICONS.navAds, go: jump("Advertising")},
       {title:"Work", icon:ICONS.navWork, go: jump("Work")},
       {title:"Records", icon:ICONS.navRecords, go: jump("Records")},
-      {title:"Dashboard", icon:ICONS.navDash, go: jump("Dashboard")},
       {title:"Agents", icon:ICONS.navAgents, go: jump("Agents")},
       {title:"Activity", icon:ICONS.navActivity, go: jump("Activity")},
       {title:"Settings", icon:ICONS.navAdmin, go: jump("Settings")}
@@ -3069,6 +3037,13 @@ export default class PulseLogic extends DCLogic {
     });
 
     const DIRS_ORDER = ["People","Organisations","Teams","Locations","Site visits"];
+    const JODZ_SECTIONS = {
+      Inventory: [["stock","Stock"],["incoming","Incoming Stock"],["returns","Returns & Adjustments"]],
+      Accounting: [["overview","Overview"],["invoices","Invoices & Bills"],["cash","Cash Outlook"]],
+      Forecasting: [["demand","Demand"],["matrix","Size & Colour"],["buying","Buying Plan"]],
+      Trends: [["signals","Signals"],["search","Search & Social"],["calendar","Calendar"]],
+      Advertising: [["overview","Overview"],["meta","Meta Ads"],["google","Google Ads"]]
+    };
     const ADMIN_ORDER = ["Automations","System health","Installed modules"];
     let contextNav, contextHint, searchHint;
     if (page === "Settings"){
@@ -3082,7 +3057,7 @@ export default class PulseLogic extends DCLogic {
     } else if (page === "Activity"){
       contextNav = [["all","Everything"],["people","People"],["ai","Agents"],["attention",(st.w - (st.railOpen ? 252 : 68)) < 1000 ? "Attention" : "Needs attention"]]
         .map(k => seg(k[1], st.actKpi === k[0], () => this.setState({actKpi:k[0]})));
-      contextHint = st.actPaused ? "LIVE VIEW PAUSED" : "LIVE · EVENT LOG";
+      contextHint = "DEMO · EVENT LOG";
       searchHint = "Search the audit trail";
     } else if (page === "Records"){
       contextNav = REC_SECTIONS.map(s => seg(s.label, st.recSection === s.id,
@@ -3094,13 +3069,19 @@ export default class PulseLogic extends DCLogic {
         () => this.setState({workSection:s.id, opsOpen:null}), String(WORK_COUNTS[s.id])));
       contextHint = "WORK · " + workSec.label.toUpperCase();
       searchHint = "Search " + workSec.label.toLowerCase();
+    } else if (JODZ_SECTIONS[page] || page === "Reporting"){
+      const cur = jodzState().sections[page];
+      contextNav = page === "Reporting" ? [seg("Reporting", true, () => {}), seg("Home", false, () => this.go("Home"))]
+        : JODZ_SECTIONS[page].map(x => seg(x[1], cur === x[0], () => jodzSetSection(page, x[0])));
+      contextHint = "JOD-Z · SNAPSHOT 26 SEP 2026";
+      searchHint = "Search " + page.toLowerCase();
     } else if (page === "Home" || page === "Dashboard"){
       contextNav = [
         seg("Home", page === "Home", () => this.go("Home")),
-        seg("Dashboard", page === "Dashboard", () => this.go("Dashboard"))
+        seg("Sales & Wholesale", page === "Dashboard", () => this.go("Dashboard"))
       ];
-      contextHint = page === "Home" ? "HELIOS · " + openKeys.length + " WAITING" : "CRM · " + areaLabel.toUpperCase();
-      searchHint = page === "Dashboard" ? "Search the dashboard" : "Search every record you can see";
+      contextHint = page === "Home" ? "BRIEFING · " + openKeys.length + " WAITING" : "JOD-Z · LAST 30 DAYS";
+      searchHint = page === "Dashboard" ? "Search orders and retailers" : "Search every record you can see";
     } else if (page === "Agents"){
       contextNav = [];
       contextHint = "";
@@ -3201,19 +3182,14 @@ export default class PulseLogic extends DCLogic {
       removeActivity: () => this.toggleIn("widgets", "activity"),
       removeKpi: () => this.toggleIn("widgets", "kpi"),
       removeVisits: () => this.toggleIn("widgets", "visits"),
-      miniKpis: ["revenue","overdue","jobs","margin"].map(k => {
-        const d = KPI_DEFS[k];
-        return {label:d.label, value:d.value, delta:d.delta, deltaColor: d.dir === "up" ? GREEN : RED};
-      }),
-      visitWidget: [
-        {title:"Boiler service · Casey Builders", when:"Wed 09:00", dot:LIME},
-        {title:"Pre-install survey · Ó Riain", when:"Wed 14:00", dot:LIME},
-        {title:"Depot check · Ballincollig", when:"Thu 09:00", dot:AMBER}
-      ],
+      miniKpis: jodzNumbers(),
+      visitWidget: jodzUpcoming(),
 
       /* dashboard */
-      isDashboard: page === "Dashboard",
-      dashTitle: "Kilbride Group · " + areaLabel,
+      isDashboard: false,
+      isJodz: ["Dashboard","Inventory","Accounting","Forecasting","Trends","Advertising","Reporting"].indexOf(page) > -1,
+      jodzPage: page,
+      dashTitle: "Jod-Z · " + areaLabel,
       kpiEdit: st.kpiEdit,
       toggleKpiEdit: () => this.setState(prev => ({kpiEdit: !prev.kpiEdit})),
       kpiEditLabel: st.kpiEdit ? "Done" : "Edit KPIs",
@@ -3256,7 +3232,7 @@ export default class PulseLogic extends DCLogic {
       }))),
       area: (() => {
         const a = ASPECT_DEFS.find(x => x.id === st.aspect) || synthesizeCustomArea(st.aspect);
-        if (!a) return {title: st.aspect, description:"Custom filter — no metrics registered against it yet.",
+        if (!a) return {title: st.aspect, description:"Custom filter. No metrics registered against it yet.",
           owner:"CUSTOM", color:"var(--accent)", metrics:[], chart:[], chartTitle:"No series", chartUnit:"",
           splitTitle:"No breakdown", split:[], tableCols:["Name","Value","Change","Note"], table:[]};
         const isCustom = !ASPECT_DEFS.find(x => x.id === st.aspect);
@@ -3308,7 +3284,7 @@ export default class PulseLogic extends DCLogic {
           })(),
           splitFootLabel: "TOTAL",
           splitFootValue: (() => {
-            if (!a.split.length) return "—";
+            if (!a.split.length) return "-";
             const raw = a.split.map(r => String(r[1]));
             const euro = /€/.test(raw[0]);
             const nums = raw.map(v => {
@@ -3417,13 +3393,13 @@ export default class PulseLogic extends DCLogic {
         };
         const stats = {
           tasks: [["OPEN FOR ME", String(openWork.length), INK, ico.open],
-                  ["DUE TODAY", String(WORK_TASKS.filter(t => /today|12:00/i.test(t.due) && !st.done[t.id]).length), INK, ico.today],
-                  ["OVERDUE", String(WORK_TASKS.filter(t => t.late && !st.done[t.id]).length), RED, ico.overdue],
-                  ["DONE BY ME", String(WORK_TASKS.filter(t => st.done[t.id] || t.done).length), INK, ico.done]],
+                  ["DUE SOON", String(openWork.filter(t => t.view === "Due soon").length), INK, ico.today],
+                  ["OVERDUE", String(openWork.filter(t => t.late).length), RED, ico.overdue],
+                  ["DONE", String(allWorkTasks.filter(isDoneW).length), INK, ico.done]],
           approvals: [["AWAITING YOU", String(pendingApprovals), AMBER, ico.open],
-                  ["AWAITING OTHERS", "1", INK, ico.today],
-                  ["OVER THRESHOLD", "2", INK, ico.overdue],
-                  ["DECIDED THIS MONTH", "9", INK, ico.done]],
+                  ["PURCHASES", String(APPROVALS.filter(a => a._ap.kind === "Purchase" && bucketOf(a) === "Awaiting you").length), INK, ico.today],
+                  ["PARTIAL DISPATCHES", String(APPROVALS.filter(a => a._ap.kind === "Partial dispatch" && bucketOf(a) === "Awaiting you").length), INK, ico.overdue],
+                  ["DECIDED IN DEMO", String(APPROVAL_COUNTS["Decided"]), INK, ico.done]],
           workflows: [["LIVE", "3", INK, ico.open],
                   ["RUNS TODAY", "42", INK, ico.today],
                   ["FAILING", "1", RED, ico.overdue],
@@ -3471,7 +3447,7 @@ export default class PulseLogic extends DCLogic {
           buttonLabel: running ? "Pause" : "Start",
           buttonIcon: running ? "M9 5.5v13 M15 5.5v13" : "M7 4.5v15l13-7.5-13-7.5Z",
           toggle: () => this.setState(prev => ({timerRunning: !prev.timerRunning,
-            timerTask: prev.timerTask || "Chase INV-10428 — Dunne & Sons",
+            timerTask: prev.timerTask || "Review drafted reminder for JOD-INV2031",
             timerPreset: prev.timerPreset || 25})),
           reset: () => this.setState({timerRunning:false, timerTask:null, timerPreset:null}),
           complete: () => this.setState({timerRunning:false, timerTask:null})
@@ -3487,9 +3463,9 @@ export default class PulseLogic extends DCLogic {
       newPriorityColor: st.newPriority === "High" ? AMBER : st.newPriority === "Low" ? DIM : "var(--ink)",
       cyclePriority: () => this.setState(prev => ({newPriority:
         prev.newPriority === "High" ? "Medium" : prev.newPriority === "Medium" ? "Low" : "High"})),
-      workTasks: allWorkTasks.filter(t => workView === "All tasks" || t.view === workView
-          || (workView === "Done" && (st.done[t.id] || t.done))).map(t => {
-        const done = st.done[t.id] !== undefined ? st.done[t.id] : !!t.done;
+      workTasks: allWorkTasks.filter(t => workView === "Done" ? isDoneW(t) : !isDoneW(t) && (workView === "Open" || workView === "All tasks"
+          || (workView === "Due soon" && t.view === "Due soon") || (workView === "High priority" && t.priority === "High"))).map(t => {
+        const done = isDoneW(t);
         const statusTint = {"In progress":[LIME,"var(--accent-faint)"], "Review":[AMBER,"var(--warn-soft)"],
           "Not started":[DIM,"var(--track)"], "Done":[GREEN,"var(--ok-soft)"]}[done ? "Done" : t.status] || [DIM,"var(--track)"];
         return {
@@ -3512,11 +3488,12 @@ export default class PulseLogic extends DCLogic {
             {label:t.day, icon:"M7 4.5v3 M17 4.5v3 M4 10h16 M5.6 6.6h12.8A1.6 1.6 0 0 1 20 8.2v10.2a1.6 1.6 0 0 1-1.6 1.6H5.6A1.6 1.6 0 0 1 4 18.4V8.2a1.6 1.6 0 0 1 1.6-1.6Z", color:DIM},
             {label:t.mins, icon:"M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z M12 7.6V12l3 1.8", color:DIM}
           ],
-          toggle: () => this.setState(prev => ({done: Object.assign({}, prev.done, {[t.id]: !done})})),
+          open: t.open,
+          toggle: () => t.jodz ? jodzCompleteTask(t.id) : this.setState(prev => ({done: Object.assign({}, prev.done, {[t.id]: !done})})),
           start: () => this.setState({timerTask:t.title, timerRunning:true, timerPreset: st.timerPreset || 25})
         };
       }),
-      workTasksEmpty: allWorkTasks.filter(t => workView === "All tasks" || t.view === workView).length === 0,
+      workTasksEmpty: false,
       workViewer: workViewer,
       workApprovals: approvalRows,
       workApprovalsEmpty: approvalRows.length === 0,
@@ -3551,7 +3528,7 @@ export default class PulseLogic extends DCLogic {
       }),
       scheduleWeek: ["MON","TUE","WED","THU","FRI","SAT","SUN"].map((d, i) => {
         const n = [3, 3, 3, 4, 4, 0, 1][i];
-        return {label:d, count: n ? String(n) : "—",
+        return {label:d, count: n ? String(n) : "-",
           cellStyle: "margin-top:7px;height:44px;border-radius:var(--r-md,14px);display:flex;align-items:center;justify-content:center;"
             + "font-family:" + MONO + ";font-size:13px;"
             + (i === 1 ? "background:var(--accent-fill,var(--accent));color:var(--on-accent);box-shadow:var(--accent-glow,none);font-weight:500"
@@ -3657,7 +3634,7 @@ export default class PulseLogic extends DCLogic {
 
       /* mini chat */
       showFab: page !== "Home" && page !== "Agents",
-      fabTitle: st.miniOpen ? "Close Helios" : "Ask Helios",
+      fabTitle: st.miniOpen ? "Close chat" : "Ask Pulse",
       fabChatStyle: "position:absolute;inset:0;transition:transform .34s var(--ease),opacity .24s var(--ease);"
         + (st.miniOpen ? "transform:rotate(-90deg) scale(.7);opacity:0" : "transform:none;opacity:1"),
       fabCloseStyle: "position:absolute;inset:0;transition:transform .34s var(--ease),opacity .24s var(--ease);"
@@ -3675,7 +3652,7 @@ export default class PulseLogic extends DCLogic {
       miniTabTrack: "position:relative;display:flex;align-items:center;width:164px;padding:2px;background:var(--surface-faint);border:1px solid var(--border);border-radius:var(--r-md,14px);flex:none;box-shadow:inset 0 1px 3px rgba(0,0,0,.34),inset 0 -1px 0 var(--glass-highlight);",
       miniTabThumb: (() => {
         const idx = (st.miniTab || "chat") === "chat" ? 0 : 1;
-        return "position:absolute;top:2px;bottom:2px;left:2px;width:calc(50% - 2px);border-radius:var(--r-sm,9px);background:var(--pill-bg);box-shadow:0 2px 5px rgba(0,0,0,.34),0 6px 16px rgba(0,0,0,.22),inset 0 1px 0 rgba(255,255,255,.5);"
+        return "position:absolute;top:2px;bottom:2px;left:2px;width:calc(50% - 2px);border-radius:calc(var(--r-md,14px) - 2px);background:var(--pill-bg);box-shadow:0 2px 5px rgba(0,0,0,.34),0 6px 16px rgba(0,0,0,.22),inset 0 1px 0 rgba(255,255,255,.5);"
           + "transform:translateX(" + (idx * 100) + "%);transition:transform .3s var(--ease)";
       })(),
       miniTabs: [["chat","Chat"],["work","Work"]].map(t => {
@@ -3698,7 +3675,7 @@ export default class PulseLogic extends DCLogic {
         {label:"Draft a chase for the worst account", run:() => this.askMini("Draft chase emails")}
       ],
       miniWorkSections: (() => {
-        const openTasks = WORK_TASKS.filter(t => t.status !== "Done").slice(0, 4);
+        const openTasks = openWork.slice(0, 4);
         const meetingsOpen = (st.miniWorkOpen || "tasks") === "meetings";
         const tasksOpen = (st.miniWorkOpen || "tasks") === "tasks";
         const notifsOpen = st.miniWorkOpen === "notifications";
@@ -3719,9 +3696,9 @@ export default class PulseLogic extends DCLogic {
           {num:"03", title:"Notifications", icon:"M12 4a5.5 5.5 0 0 0-5.5 5.5v3.2L5 16h14l-1.5-3.3V9.5A5.5 5.5 0 0 0 12 4Z M9.8 19a2.2 2.2 0 0 0 4.4 0",
             statusText:"12 unread", statusColor:"#6ad0f0", open:notifsOpen, toggle:toggle("notifications"),
             isEmpty:false, emptyText:"",
-            rows:[{isCheck:false, title:"Xero token expired — reconnect", hasTag:false},
-              {isCheck:false, title:"Aoife raised a €14,280 approval", hasTag:false},
-              {isCheck:false, title:"3 accounts moved off Standard rate", hasTag:false}],
+            rows:[{isCheck:false, title:"JOD-W1041 is 12 units short", hasTag:false},
+              {isCheck:false, title:"PO-D193 awaiting approval", hasTag:false},
+              {isCheck:false, title:"JOD-INV2031 reminder drafted, not sent", hasTag:false}],
             hasLink:true, linkLabel:"All notifications", linkGo: () => this.setState({showNotifs:true, miniOpen:false}),
             wrapStyle: "background:var(--surface);border:1px solid var(--border);border-radius:var(--card-r,18px);overflow:hidden"}
         ];
@@ -3918,7 +3895,7 @@ export default class PulseLogic extends DCLogic {
             thread:[{kind:"stamp", text:"Just now"},
               {kind:"agent", text: prev.trained
                 ? "trained and ready. i read the ontology and wrote my own prompt from it. what should i pick up first?"
-                : "created. i have no context yet — train me from the ontology and i'll be useful."}]}].concat(prev.agents)};
+                : "created. i have no context yet. train me from the ontology and i'll be useful."}]}].concat(prev.agents)};
       }),
       approvalsEmpty: approvals.length === 0,
       approvalsEmptyTitle: st.approvalFilter === "Decided" ? "Nothing decided yet"
@@ -3939,7 +3916,7 @@ export default class PulseLogic extends DCLogic {
         + ((contextNav.length <= 6 && (st.w - (st.railOpen ? 252 : 68) - 12) >= 780) ? "" : "width:fit-content;margin:0 auto;")
         + "background:var(--surface);border:1px solid var(--border);border-radius:999px;"
         + "backdrop-filter:blur(24px) saturate(1.4);-webkit-backdrop-filter:blur(24px) saturate(1.4);"
-        + "box-shadow:0 1px 0 rgba(255,255,255,.05) inset,0 10px 30px rgba(0,0,0,.28)",
+        + "box-shadow:var(--header-shadow)",
       headerStyle: "flex:none;display:grid;align-items:center;gap:14px;padding:14px 22px 12px;border-bottom:1px solid var(--border);"
         + "grid-template-columns:minmax(0,1fr) " + (mid ? "minmax(150px,340px)" : "44px") + " minmax(0,1fr)",
       barOpen: st.barOpen,
@@ -3986,9 +3963,9 @@ export default class PulseLogic extends DCLogic {
       tabPad: (st.w - (st.railOpen ? 252 : 68)) >= 1100 ? "0 18px" : (st.w - (st.railOpen ? 252 : 68)) >= 1000 ? "0 12px" : "0 10px",
       _tabs: (() => { const tight = (st.w - (st.railOpen ? 252 : 68)) < 1000 && contextNav.length >= 4;
         contextNav.forEach(t => { t.showCount = !!t.count && !tight; }); return 0; })(),
-      tabsLoose: !((st.w - (st.railOpen ? 252 : 68)) < 1000 && contextNav.length >= 4),
+      tabsLoose: false,
       tabsTight: (st.w - (st.railOpen ? 252 : 68)) < 1000 && contextNav.length >= 4,
-      tabActiveBg: ((st.w - (st.railOpen ? 252 : 68)) < 1000 && contextNav.length >= 4) ? "var(--surface-2)" : "none",
+      tabActiveBg: "var(--surface-2);box-shadow:inset 0 0 0 1px var(--border)",
       searchWrapFlex: (contextNav.length <= 6 && (st.w - (st.railOpen ? 252 : 68) - 12) >= 780) ? "1 1 auto" : "0 0 auto",
       barLabel: st.barOpen ? "Collapse the bar" : "Expand the bar",
       barChevronStyle: "transition:transform .3s var(--ease);transform:rotate(" + (st.barOpen ? "0deg" : "180deg") + ")",
@@ -4038,9 +4015,13 @@ export default class PulseLogic extends DCLogic {
       })(),
       notificationFeed, features, results,
       inbox: inboxKeys.map(rowFor),
-      inboxTop: openKeys.slice(0,3).map(rowFor),
+      inboxTop: jodzDecisions().slice(0,4),
       inboxFilters: ["All","Approvals","Alerts","Work","Automations"].map(f => ({label:f, style:pillStyle(st.inboxFilter === f), pick:() => this.setState({inboxFilter:f, open:null})})),
-      tasks: TASKS.filter(t => t.queue.includes("mine")).map(decorateTask),
+      tasks: jodzTasks().slice(0,6).map(t => {
+        const done = t.status === "Done";
+        return {title:t.title, due:t.dueLabel, open:t.open, checkOpacity: done ? "1" : "0", fill: done ? LIME : "transparent", ring: done ? LIME : "var(--track)",
+          color: done ? FAINT : INK, strike: done ? "line-through" : "none", dueColor: done ? FAINT : (t.late ? RED : "var(--mid)"), toggle: () => jodzCompleteTask(t.id)};
+      }),
       settingsStyle: railStyle(page === "Settings") + ";animation:railIn .42s var(--ease) 300ms both",
       settingsGlyphStyle: glyphStyle(page === "Settings", st.hovered === "__settings"),
       settingsHovered: st.hovered === "__settings",
@@ -4059,8 +4040,9 @@ export default class PulseLogic extends DCLogic {
         const live = st.agents.filter(a => a.state === "working" || a.state === "thinking").length;
         return (live ? live + " AGENTS RUNNING" : "NO AGENTS RUNNING") + " · SYNCED 2 MIN AGO";
       })(),
-      homeSubline: "Ask about any record, job or number you can see.",
-      approvalsPill: openKeys.length + " APPROVALS · €48,120 HELD",
+      homeSubline: "Answers come from the Jod-Z demo dataset. No live AI service is connected.",
+      approvalsPill: jodzWaiting(),
+      goApprovals: () => { this.go("Work"); this.setState({workSection:"approvals"}); },
       showApprovalNote: openKeys.length > 0 && !st.approvalNoteHidden,
       dismissApprovalNote: () => this.setState({approvalNoteHidden:true}),
       /* Home canvas: a decorative layer the user can switch, scoped to the
@@ -4184,11 +4166,11 @@ export default class PulseLogic extends DCLogic {
       isWork: page === "Work",
       isSettings: page === "Settings",
       admin: adminModel,
-      inboxCount: String(openKeys.length),
-      inboxEmpty: openKeys.length === 0,
+      inboxCount: String(jodzDecisions().length),
+      inboxEmpty: jodzDecisions().length === 0,
       filteredEmpty: inboxKeys.length === 0,
       queueEmpty: queueTasks.length === 0,
-      taskSummary: TASKS.filter(t => t.queue.includes("mine") && st.done[t.id]).length + " of " + queueCounts.mine + " done",
+      taskSummary: jodzTasks().filter(t => t.status === "Done").length + " of " + jodzTasks().length + " done",
       heliosEmpty: st.thread.length === 0,
       threadOpen: st.thread.length > 0,
       threadTitle: st.thread.length ? st.thread[0].text : "",
@@ -4204,27 +4186,18 @@ export default class PulseLogic extends DCLogic {
           hasTool: isHelios, tool:m.tool || "", toolEffect: m.effect ? "· " + m.effect : "",
           toolDot: m.effect === "write" ? AMBER : LIME,
           hasTable: done && !!m.cols,
-          cols:m.cols || [], tableCols: m.cols ? "1.6fr 1fr .85fr .9fr" : "1fr",
+          cols:m.cols || [], tableCols: m.cols ? (m.cols.length === 3 ? "1.4fr 1fr 1fr" : "1.6fr 1fr .85fr .9fr") : "1fr",
           rows:(m.rows || []).map(r => ({cells:r.map((v,i) => ({v, color: i===0 ? INK : DIM, font: i===0 ? "inherit" : MONO}))})),
           hasConfirm: done && m.confirm === true,
           confirmSummary: m.confirmSummary || "",
           confirmHash: "sha256 a4f19c…",
           hasActions: done && m.confirm !== true && !!m.actions,
-          actions:(m.actions || []).map(a => ({label:a[0], bg:a[1] ? LIME : "none", color:a[1] ? "var(--on-accent)" : "var(--ink)", border:a[1] ? LIME : "var(--border)", run:() => this.ask(a[0])}))
+          actions:(m.actions || []).map(a => ({label:a[0], bg:a[1] ? LIME : "none", color:a[1] ? "var(--on-accent)" : "var(--ink)", border:a[1] ? LIME : "var(--border)", run:() => runAction(a, (x) => this.ask(x))}))
         };
       }),
-      suggestions: [
-        {label:"Which organisations are over their limit?", run:() => this.ask("Which organisations are over their credit limit?")},
-        {label:"What is overdue in my work?", run:() => this.ask("Summarise the tasks running late")},
-        {label:"What visits are booked this week?", run:() => this.ask("What site visits are booked this week?")}
-      ],
-      activity: [
-        {who:"Aoife Nolan", what:"raised purchase order PO-4471", event:"core.approval.created", when:"18m", dot:LIME},
-        {who:"Helios", what:"flagged Dunne & Sons payment behaviour", event:"core.notification.created", when:"2h", dot:AMBER},
-        {who:"Tom Walsh", what:"created a depot stock check visit", event:"site-visits.visit.created", when:"Yesterday", dot:NEUTRAL},
-        {who:"Overdue reminder", what:"sent 6 of 10 emails", event:"core.automation.failed", when:"08:00", dot:AMBER},
-        {who:"Dispatcher", what:"dead-lettered 2 Xero deliveries", event:"core.event.dead", when:"02:16", dot:RED}
-      ],
+      suggestions: ["What should we reorder?","Which wholesale orders are blocked?","Can we afford the proposed stock purchase?"]
+        .map(q => ({label:q, run:() => this.ask(q)})),
+      activity: jodzActivity(),
       /* Cards, not rows: each one lands on its own spring, newest first, with
          the status colour carried into a soft glow behind its marker. */
       notifications: notificationFeed.slice(0,5).map((n, i) => ({
@@ -4240,20 +4213,20 @@ export default class PulseLogic extends DCLogic {
       })),
       notifGroups: [["EARLIER TODAY", 0]],
       deployment: [
-        {k:"Client", v:"kilbride", font:MONO},
-        {k:"App name", v:"Kilbride Group Operations", font:"inherit"},
-        {k:"Accent", v:"oklch(0.86 0.19 118)", font:MONO},
-        {k:"Terminology", v:"organisation → Merchant", font:"inherit"},
+        {k:"Client", v:"jod-z", font:MONO},
+        {k:"App name", v:"Jod-Z Operations (demo)", font:"inherit"},
+        {k:"Brand tokens", v:"#111111 · #F7F7F5 · #71717A", font:MONO},
+        {k:"Terminology", v:"organisation → Retailer", font:"inherit"},
         {k:"Locale", v:"EUR · Europe/Dublin", font:"inherit"},
-        {k:"Helios channels", v:"home, whatsapp", font:MONO}
+        {k:"Data", v:"Fictional demo data", font:"inherit"}
       ],
       roles: [
-        {name:"Owner", grants:"all core permissions + site-visits:*", scope:"all", users:"1"},
-        {name:"Accounts", grants:"core:organisation:*, core:approval:decide, core:task:*", scope:"all", users:"3"},
-        {name:"Installer", grants:"core:task:view, core:task:update, site-visits:visit:*", scope:"own", users:"9"},
-        {name:"Counter staff", grants:"core:person:view, core:organisation:view", scope:"location", users:"6"}
+        {name:"Owner", grants:"all permissions, approves purchases, adjustments and partial dispatch", scope:"all", users:"1"},
+        {name:"Operations", grants:"wholesale orders, allocation, dispatch", scope:"all", users:"1"},
+        {name:"Stock", grants:"stock, deliveries, returns, draft purchases", scope:"all", users:"1"},
+        {name:"Finance", grants:"invoices, bills, cash outlook, reminders", scope:"all", users:"1"}
       ],
-      team: [{i:"AN",bg:"var(--accent)"},{i:"SB",bg:"#9fd6f0"},{i:"TW",bg:"#e6c78a"}],
+      team: [{i:"RK",bg:"var(--accent)"},{i:"MB",bg:"#9fd6f0"},{i:"DW",bg:"#e6c78a"}],
       paletteOpen: st.paletteOpen, showNotifs: st.showNotifs, query: st.query, draft: st.draft,
       noResults: results.length === 0,
       palScopes, hasQuery: q.length > 0, askPreview: q ? '"' + q + '"' : "",
@@ -4300,7 +4273,7 @@ export default class PulseLogic extends DCLogic {
         + (st.theme === "light" ? "transform:rotate(80deg) scale(.55);opacity:0" : "transform:none;opacity:1"),
       // Back from light returns to whichever dark theme you were on, not the base "dark".
       toggleTheme: () => this.setState(p => p.theme === "light"
-        ? {theme: p.darkTheme || this.props.theme || "harbour"}
+        ? {theme: p.darkTheme || this.props.theme || "jodz"}
         : {theme: "light", darkTheme: p.theme}),
       toggleNotifs: () => this.setState({showNotifs:!st.showNotifs}),
       /* Home: the widget rail steps away once a conversation starts, so the
@@ -4322,12 +4295,12 @@ export default class PulseLogic extends DCLogic {
         {label:"Agents", icon:ICONS.navAgents, go: () => this.setState({page:"Agents"})}
       ],
       composerPrompts: [
-        {label:"Chase the three invoices past 60 days", tag:"CASH", icon:ICONS.insights,
-          run: () => this.ask("Chase the three invoices past 60 days")},
-        {label:"Why did the Xero sync fail this morning?", tag:"HEALTH", icon:ICONS.health,
-          run: () => this.ask("Why did the Xero sync fail this morning?")},
-        {label:"Who should cover tomorrow's Ballincollig visit?", tag:"WORK", icon:ICONS.visits,
-          run: () => this.ask("Who should cover tomorrow's Ballincollig visit?")}
+        {label:"What should we reorder?", tag:"STOCK", icon:ICONS.navStock,
+          run: () => this.ask("What should we reorder?")},
+        {label:"Which wholesale orders are blocked?", tag:"ORDERS", icon:ICONS.navSales,
+          run: () => this.ask("Which wholesale orders are blocked?")},
+        {label:"Can we afford the proposed stock purchase?", tag:"CASH", icon:ICONS.navBooks,
+          run: () => this.ask("Can we afford the proposed stock purchase?")}
       ].map((p, i) => Object.assign(p, {
         rowStyle: "display:flex;align-items:center;gap:13px;width:100%;padding:10px 14px;background:none;border:0;"
           + (i ? "border-top:1px solid var(--border);" : "")
