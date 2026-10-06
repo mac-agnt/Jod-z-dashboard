@@ -12,13 +12,6 @@ import {
   NEUTRAL,
   MONO,
   ICONS,
-  REC_SECTIONS,
-  CONTACTS,
-  FILE_TREE,
-  ONTO_NODES,
-  ONTO_EDGES,
-  REC_TEMPLATES,
-  REC_TEMPLATE_CATS,
   PEOPLE,
   ROLE_LEVELS,
   PERM_KEYS,
@@ -31,69 +24,28 @@ import {
   ADMIN_ICONS,
   ADMIN_CARDS,
   ADMIN_GROUPS,
-  SRC_TINT,
-  SRC_ABBR,
   STREAM_DEFS,
   NAV,
   ITEMS,
   ORDER,
   synthesizeCustomArea,
   pickAnswer,
-  ORGS,
   AGENT_DEFS,
   KPI_DEFS,
   ASPECT_DEFS,
   FILTER_GROUPS,
-  OPS_DEFS,
-  OPS_FILTERS,
-  WORK_SECTIONS,
   WORK_TASKS,
   WORKFLOWS,
   SCHEDULES,
   WIDGET_DEFS,
   WORK_WIDGETS,
-  PERSONALITIES,
-  ANSWER_STYLES,
-  SKILL_DEFS,
-  TRAIN_PHASES,
-  BRIEF_QUESTIONS,
-  STATE_LABELS,
-  FACE_SHAPES,
-  FACE_TINTS,
-  CLUSTERS,
-  mulberry,
-  hexRGB,
-  buildGraph
+  SKILL_DEFS
 } from "./data";
 import { answerFor, runAction, decisions as jodzDecisions, upcoming as jodzUpcoming, numbers as jodzNumbers, homeTasks as jodzTasks, activityFeed as jodzActivity, waitingSummary as jodzWaiting } from "../jodz/home";
 import { linkLabel as linkLabelOf, staff as jodzStaff } from "../jodz/derive";
 import { goTo as jodzGoTo, openRecord as jodzOpenRecord } from "../jodz/store";
 import { completeTask as jodzCompleteTask, openDrawer as jodzOpenDrawer, decideApproval as jodzDecide } from "../jodz/store";
 import { subscribe as jodzSubscribe, registerNavigator, getState as jodzState, setSection as jodzSetSection } from "../jodz/store";
-
-/* True for a light colour (hex or rgb/rgba). The ontology draws ink-on-paper on light themes. */
-function isLightColour(str){
-  let r = 0, g = 0, b = 0;
-  const s = (str || "").trim();
-  if (s[0] === "#"){
-    const h = s.length === 4 ? s.slice(1).split("").map(c => c + c).join("") : s.slice(1, 7);
-    r = parseInt(h.slice(0, 2), 16); g = parseInt(h.slice(2, 4), 16); b = parseInt(h.slice(4, 6), 16);
-  } else {
-    const m = s.match(/[\d.]+/g);
-    if (!m || m.length < 3) return false;
-    r = +m[0]; g = +m[1]; b = +m[2];
-  }
-  return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255 > 0.5;
-}
-/* A cluster hue deepened so it reads as ink on a light ground. */
-const _inkCache = {};
-function inkOf(hex){
-  if (_inkCache[hex]) return _inkCache[hex];
-  const c = hexRGB(hex);
-  const v = "rgb(" + Math.round(c[0] * 0.6) + "," + Math.round(c[1] * 0.6) + "," + Math.round(c[2] * 0.6) + ")";
-  _inkCache[hex] = v;
-  return v;
-}
 
 /* All state and behaviour for Pulse. renderVals() returns the flat object the views render from. */
 export default class PulseLogic extends DCLogic {
@@ -140,826 +92,6 @@ export default class PulseLogic extends DCLogic {
       actor: tpl[2], rel: tpl[3], src: tpl[4], status,
       progress: status === "working" ? 8 + Math.random() * 22 : 100,
       at: at === undefined ? Date.now() : at, fresh: at === undefined};
-  }
-
-  /* Activity is read from the shared Jod-Z event log in renderVals, so nothing is generated here. */
-  tickActivity(){}
-
-
-  /* Several shortest-path searches run at once, each with its own hue. The
-     settling order and parent tree are solved up front; the animation only
-     reveals them, so every spark follows a route the graph really has. */
-  QUERY_HUES(){ return ["#c8f04b", "#6ad0f0", "#9d8cf5", "#f0c04b", "#f07a9d", "#5fe0a8"]; }
-
-  /* Keyword search: match the query against cluster names, then trace a real
-     path between two matches (or around one, if only a single cluster hits)
-     using the same Dijkstra the ambient sparks use — so the result is an
-     actual route through the graph, not a fake highlight. */
-  matchClusters(q){
-    const words = q.toLowerCase().split(/[^a-z]+/).filter(Boolean);
-    if (!words.length) return [];
-    const hit = [];
-    CLUSTERS.forEach((c, i) => {
-      const name = c[0].toLowerCase();
-      if (words.some(w => name.includes(w) || w.includes(name.split(" ")[0]))) hit.push(i);
-    });
-    return hit;
-  }
-
-  runOntoQuery(){
-    const q = (this.state.ontoQuery || "").trim();
-    if (!q || !this.graph) { this.setState({ontoResult:null}); return; }
-    const g = this.graph, hits = this.matchClusters(q);
-    if (!hits.length){ this.setState({ontoResult:{empty:true, query:q}}); return; }
-
-    const hubOf = (ci) => g.hubs.filter(h => g.nodes[h].cluster === ci);
-    const hues = this.QUERY_HUES();
-
-    if (hits.length > 1){
-      const source = hubOf(hits[0])[Math.floor(Math.random() * hubOf(hits[0]).length)];
-      const pool = hubOf(hits[1]);
-      const target = pool[Math.floor(Math.random() * pool.length)];
-      const search = this.makeTargetedSearch(source, target, 0, hues[0]);
-      search.pinned = true;
-      this.searches = [search];
-      this.setState({ontoResult:{
-        empty:false, query:q, mode:"path",
-        from: CLUSTERS[g.nodes[source].cluster][0], to: CLUSTERS[g.nodes[target].cluster][0],
-        hops: search.path.length ? search.path.length - 1 : null,
-        found: search.path.length > 0
-      }});
-      return;
-    }
-
-    // A single match fans out several routes at once — everything the graph
-    // has connected to that topic, not just one path to one other record.
-    const hub = hubOf(hits[0]);
-    const fanCount = Math.min(5, Math.max(3, hub.length));
-    const touched = new Set();
-    const runs = [];
-    for (let i = 0; i < fanCount; i++){
-      const source = this.rimNode();
-      const target = this.centreNode();
-      const search = this.makeTargetedSearch(source, target, i, hues[i % hues.length]);
-      search.pinned = true;
-      if (search.path.length){ touched.add(CLUSTERS[g.nodes[target].cluster][0]); }
-      runs.push(search);
-    }
-    this.searches = runs;
-    touched.delete(CLUSTERS[hits[0]][0]);
-    this.setState({ontoResult:{
-      empty:false, query:q, mode:"fan",
-      from: CLUSTERS[hits[0]][0],
-      connected: Array.from(touched),
-      found: runs.some(s => s.path.length > 0)
-    }});
-  }
-
-  makeTargetedSearch(source, target, slot, hue){
-    const g = this.graph, n = g.nodes.length;
-    const dist = new Float64Array(n).fill(Infinity);
-    const parent = new Int32Array(n).fill(-1), pEdge = new Int32Array(n).fill(-1);
-    const done = new Uint8Array(n), order = [];
-    dist[source] = 0;
-    const heap = [[0, source]];
-    const push = (d, v) => { heap.push([d, v]); let i = heap.length - 1;
-      while (i > 0){ const p = (i - 1) >> 1; if (heap[p][0] <= heap[i][0]) break;
-        const t = heap[p]; heap[p] = heap[i]; heap[i] = t; i = p; } };
-    const pop = () => { const top = heap[0], last = heap.pop();
-      if (heap.length){ heap[0] = last; let i = 0;
-        for(;;){ const l = 2 * i + 1, r = l + 1; let m = i;
-          if (l < heap.length && heap[l][0] < heap[m][0]) m = l;
-          if (r < heap.length && heap[r][0] < heap[m][0]) m = r;
-          if (m === i) break; const t = heap[m]; heap[m] = heap[i]; heap[i] = t; i = m; } }
-      return top; };
-    while (heap.length){
-      const [d, v] = pop();
-      if (done[v]) continue;
-      done[v] = 1;
-      order.push({v, edge: pEdge[v]});
-      if (v === target) break;
-      for (const [w, cost, id] of g.adj[v]){
-        const nd = d + cost;
-        if (nd < dist[w]){ dist[w] = nd; parent[w] = v; pEdge[w] = id; push(nd, w); }
-      }
-    }
-    const path = [];
-    if (done[target]){ let v = target; while (v !== -1){ path.push(v); v = parent[v]; } path.reverse(); }
-    return {slot, hue, source, target, order, path,
-      reveal: 0, cursor: 0, speed: 0.14,
-      phase: "sweep", pathReveal: 0, hold: 0, fade: 0,
-      delay: 0, sparks: [], traces: []};
-  }
-
-  clearOntoQuery(){ this.setState({ontoQuery:"", ontoResult:null}); this.planSearch(); }
-
-  /* The node closest to the origin — every inbound trace converges here. */
-  centreNode(){
-    if (this._centre !== undefined) return this._centre;
-    const nodes = this.graph.nodes;
-    let best = 0, bd = Infinity;
-    const pool = this.graph.coreIds && this.graph.coreIds.length ? this.graph.coreIds : nodes.map((_, i) => i);
-    for (const i of pool){
-      const nd = nodes[i];
-      const d = nd.x * nd.x + nd.y * nd.y + nd.z * nd.z;
-      if (d < bd){ bd = d; best = i; }
-    }
-    return (this._centre = best);
-  }
-  /* A leaf out on the rim, biased to the far edge of the structure. */
-  rimNode(){
-    const nodes = this.graph.nodes;
-    let best = 0, bd = -1;
-    for (let k = 0; k < 40; k++){
-      const i = Math.floor(Math.random() * nodes.length);
-      const nd = nodes[i];
-      if (nd.kind === "core") continue;
-      const d = nd.x * nd.x + nd.y * nd.y + nd.z * nd.z;
-      if (d > bd){ bd = d; best = i; }
-    }
-    return best;
-  }
-  makeSearch(slot){
-    const g = this.graph, n = g.nodes.length, rnd = Math.random;
-    // Fire inward: out on the rim, home to the nucleus.
-    const source = this.rimNode();
-    const target = this.centreNode();
-
-    const dist = new Float64Array(n).fill(Infinity);
-    const parent = new Int32Array(n).fill(-1), pEdge = new Int32Array(n).fill(-1);
-    const done = new Uint8Array(n), order = [];
-    dist[source] = 0;
-    const heap = [[0, source]];
-    const push = (d, v) => { heap.push([d, v]); let i = heap.length - 1;
-      while (i > 0){ const p = (i - 1) >> 1; if (heap[p][0] <= heap[i][0]) break;
-        const t = heap[p]; heap[p] = heap[i]; heap[i] = t; i = p; } };
-    const pop = () => { const top = heap[0], last = heap.pop();
-      if (heap.length){ heap[0] = last; let i = 0;
-        for(;;){ const l = 2 * i + 1, r = l + 1; let m = i;
-          if (l < heap.length && heap[l][0] < heap[m][0]) m = l;
-          if (r < heap.length && heap[r][0] < heap[m][0]) m = r;
-          if (m === i) break; const t = heap[m]; heap[m] = heap[i]; heap[i] = t; i = m; } }
-      return top; };
-    while (heap.length){
-      const [d, v] = pop();
-      if (done[v]) continue;
-      done[v] = 1;
-      order.push({v, edge: pEdge[v]});
-      if (v === target) break;
-      for (const [w, cost, id] of g.adj[v]){
-        const nd = d + cost;
-        if (nd < dist[w]){ dist[w] = nd; parent[w] = v; pEdge[w] = id; push(nd, w); }
-      }
-    }
-    const path = [];
-    if (done[target]){ let v = target; while (v !== -1){ path.push(v); v = parent[v]; } path.reverse(); }
-
-    return {slot, hue: this.QUERY_HUES()[slot % 6], source, target, order, path,
-      reveal: 0, cursor: 0, speed: 0.34 + Math.random() * 0.16,
-      phase: "sweep", pathReveal: 0, hold: 0, fade: 0,
-      delay: 2400 + Math.random() * 2600, sparks: [], traces: []};
-  }
-
-  /* One throwaway Dijkstra to find a record a short hop-count away. */
-  nearbyTarget(source, steps){
-    const g = this.graph, n = g.nodes.length;
-    const dist = new Float64Array(n).fill(Infinity), done = new Uint8Array(n);
-    dist[source] = 0;
-    const heap = [[0, source]], order = [];
-    while (heap.length && order.length <= steps + 2){
-      heap.sort((a, b) => a[0] - b[0]);
-      const next = heap.shift();
-      const d = next[0], v = next[1];
-      if (done[v]) continue;
-      done[v] = 1; order.push(v);
-      for (const link of g.adj[v]){
-        const w = link[0], nd = d + link[1];
-        if (nd < dist[w]){ dist[w] = nd; heap.push([nd, w]); }
-      }
-    }
-    const tail = order.slice(Math.max(1, order.length - 8));
-    return tail[Math.floor(Math.random() * tail.length)] || source;
-  }
-
-  planSearch(){
-    if (!this.graph) return;
-    this.searches = [this.makeSearch(0)];
-    this.clock = 0;
-  }
-
-  advance(dt){
-    if (!this.searches) return;
-    this.clock = (this.clock || 0) + dt;
-    for (let i = 0; i < this.searches.length; i++){
-      const s = this.searches[i];
-      if (s.delay > 0){ s.delay -= dt; continue; }
-
-      if (s.phase === "sweep"){
-        s.reveal += dt * s.speed;
-        // Each newly settled edge throws a spark that runs its length.
-        while (s.cursor < Math.min(s.order.length, Math.floor(s.reveal))){
-          const step = s.order[s.cursor++];
-          if (step.edge >= 0){
-            if ((s.cursor & 3) === 0 && s.sparks.length < 90)
-              s.sparks.push({e: step.edge, t: 0, life: 420 + Math.random() * 300});
-            if (s.traces.length < 700) s.traces.push({e: step.edge, age: 0});
-          }
-        }
-        if (s.reveal >= s.order.length){ s.phase = "path"; s.pathReveal = 0; }
-      } else if (s.phase === "path"){
-        s.pathReveal += dt * 0.020;
-        if (s.pathReveal >= s.path.length + 1){ s.phase = "hold"; s.hold = 0; }
-      } else if (s.phase === "hold"){
-        s.hold += dt;
-        if (s.hold > 900 + s.slot * 260) s.phase = "fade";
-      } else if (s.phase === "fade"){
-        if (s.pinned){ s.fade = Math.min(1, s.fade + dt * 0.0016); continue; }
-        s.fade += dt * 0.0016;
-        if (s.fade >= 1) this.searches[i] = this.makeSearch(s.slot);
-      }
-
-      for (let k = s.sparks.length - 1; k >= 0; k--){
-        const sp = s.sparks[k];
-        sp.t += dt / sp.life;
-        if (sp.t >= 1) s.sparks.splice(k, 1);
-      }
-      for (let k = s.traces.length - 1; k >= 0; k--){
-        s.traces[k].age += dt;
-        if (s.traces[k].age > 1000) s.traces.splice(k, 1);
-      }
-    }
-  }
-
-  // A cached radial sprite per colour. shadowBlur is the most expensive call
-  // in a per-node loop; a pre-rendered gradient drawn with drawImage is free.
-  glowSprite(hex, dark){
-    const cache = this._sprites || (this._sprites = {});
-    const key = hex + (dark === false ? "-l" : "-d");
-    if (cache[key]) return cache[key];
-    const S = 64, cv = document.createElement("canvas");
-    cv.width = S; cv.height = S;
-    const c = cv.getContext("2d");
-    let rgb = hexRGB(hex);
-    const gr = c.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
-    if (dark === false){
-      // On paper the same light has to read as ink: darken the hue and drop the
-      // white core, so a source-over stamp deepens the ground instead of washing it.
-      rgb = [Math.round(rgb[0] * 0.52), Math.round(rgb[1] * 0.52), Math.round(rgb[2] * 0.52)];
-      gr.addColorStop(0, "rgba(" + rgb[0] + "," + rgb[1] + "," + rgb[2] + ",.62)");
-      gr.addColorStop(0.3, "rgba(" + rgb[0] + "," + rgb[1] + "," + rgb[2] + ",.3)");
-      gr.addColorStop(1, "rgba(" + rgb[0] + "," + rgb[1] + "," + rgb[2] + ",0)");
-    } else {
-      gr.addColorStop(0, "rgba(255,255,255,.95)");
-      gr.addColorStop(0.18, "rgba(" + rgb[0] + "," + rgb[1] + "," + rgb[2] + ",.9)");
-      gr.addColorStop(0.5, "rgba(" + rgb[0] + "," + rgb[1] + "," + rgb[2] + ",.26)");
-      gr.addColorStop(1, "rgba(" + rgb[0] + "," + rgb[1] + "," + rgb[2] + ",0)");
-    }
-    c.fillStyle = gr; c.fillRect(0, 0, S, S);
-    cache[key] = cv;
-    return cv;
-  }
-  // Low-res bloom bed: everything bright is stamped here, then scaled up
-  // additively over the scene.
-  bloomBuffer(w, h, dark, pageCtx){
-    if (dark === false) return {light:true, ctx:pageCtx, k:1};
-    const q = 0.3;
-    const bw = Math.max(8, Math.round(w * q)), bh = Math.max(8, Math.round(h * q));
-    const b = this._bloom || (this._bloom = {cv: document.createElement("canvas")});
-    if (b.cv.width !== bw || b.cv.height !== bh){ b.cv.width = bw; b.cv.height = bh; }
-    b.ctx = b.cv.getContext("2d");
-    b.k = q;
-    b.ctx.setTransform(1, 0, 0, 1, 0, 0);
-    b.ctx.clearRect(0, 0, bw, bh);
-    b.ctx.globalCompositeOperation = "lighter";
-    return b;
-  }
-  stamp(b, sprite, x, y, r, alpha){
-    if (alpha <= 0.012 || r <= 0) return;
-    const c = b.ctx, d = r * 2 * b.k;
-    if (b.light){
-      const prev = c.globalCompositeOperation, pa = c.globalAlpha;
-      c.globalCompositeOperation = "source-over";
-      c.globalAlpha = Math.min(1, alpha * 0.85);
-      c.drawImage(sprite, x - r, y - r, r * 2, r * 2);
-      c.globalCompositeOperation = prev; c.globalAlpha = pa;
-      return;
-    }
-    c.globalAlpha = Math.min(1, alpha);
-    c.drawImage(sprite, x * b.k - d / 2, y * b.k - d / 2, d, d);
-  }
-
-  drawGraph(){
-    const cv = this.canvas, g = this.graph;
-    if (!cv || !g || !this.searches) return;
-    const dpr = Math.min(1.5, window.devicePixelRatio || 1);
-    const box = cv.getBoundingClientRect();
-    if (!box.width || !box.height) return;
-    if (cv.width !== Math.round(box.width * dpr) || cv.height !== Math.round(box.height * dpr)){
-      cv.width = Math.round(box.width * dpr); cv.height = Math.round(box.height * dpr);
-    }
-    const ctx = cv.getContext("2d");
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, box.width, box.height);
-
-    const now = this.clock || 0;
-    if (!this._css || now - this._cssAt > 600){
-      const cs = getComputedStyle(cv);
-      // Dark or light is read from the page background, not a hard-coded ink value,
-      // so any theme renders the right way round.
-      const dk = !isLightColour(cs.getPropertyValue("--bg").trim());
-      this._css = {dark:dk, pathInk: dk ? "#ffffff" : "#141210",
-        matchInk: cs.getPropertyValue("--accent").trim() || "#c8f04b"};
-      this._cssAt = now;
-    }
-    const dark = this._css.dark, pathInk = this._css.pathInk, matchInk = this._css.matchInk;
-
-    // Adaptive quality: a rolling frame cost sheds the expensive layers before
-    // the frame rate drops rather than after.
-    const tStart = performance.now();
-    if (this._cost === undefined) this._cost = 8;
-    const heavy = this._cost < 13, mid = this._cost < 22;
-    const bloom = this.bloomBuffer(box.width, box.height, dark, ctx);
-
-    /* ---- camera: slow yaw, fixed tilt, perspective projection ----
-       Everything downstream reads from the cached projection, so nodes,
-       edges, sparks and rings all share one depth model. */
-    const bd = g.bounds;
-    const cam = this.cam || (this.cam = {yaw:0, pitch:0.42, zoom:1, vy:0, vp:0, drag:false, spin:0});
-    if (!cam.drag){
-      cam.yaw += cam.vy; cam.pitch += cam.vp;
-      cam.vy *= 0.94; cam.vp *= 0.94;
-      if (Math.abs(cam.vy) < 0.0004) cam.spin += 0.00013;   // idle drift resumes
-    }
-    cam.pitch = Math.max(-1.35, Math.min(1.35, cam.pitch));
-    const yaw = cam.yaw + cam.spin;
-    const pitch = cam.pitch;
-    const cosY = Math.cos(yaw), sinY = Math.sin(yaw);
-    const cosP = Math.cos(pitch), sinP = Math.sin(pitch);
-    const FOV = 1.62, R = bd.reach || bd.radius || 1;
-    const pad = 30;
-    const scale = cam.zoom * Math.min((box.width - pad * 2), (box.height - pad * 2)) / (R * 2.02);
-    const cx = box.width / 2, cy = box.height / 2;
-
-    const n = g.nodes.length;
-    if (!this._px || this._px.length !== n){
-      this._px = new Float32Array(n); this._py = new Float32Array(n);
-      this._pd = new Float32Array(n); this._pz = new Float32Array(n);
-    }
-    const px = this._px, py = this._py, pd = this._pd, pz = this._pz;
-    for (let i = 0; i < n; i++){
-      const nd = g.nodes[i];
-      const x0 = nd.x, y0 = nd.y, z0 = nd.z;
-      const x1 = x0 * cosY + z0 * sinY;
-      const z1 = z0 * cosY - x0 * sinY;
-      const y2 = y0 * cosP - z1 * sinP;
-      const z2 = z1 * cosP + y0 * sinP;
-      const depth = FOV * R / (FOV * R + z2);      // >1 near, <1 far
-      px[i] = cx + x1 * scale * depth;
-      py[i] = cy + y2 * scale * depth;
-      pd[i] = depth;
-      pz[i] = z2;
-    }
-    // fog: 0 at the back of the cloud, 1 at the front
-    const fog = (i) => {
-      const t = (pz[i] + R) / (2 * R);
-      return 0.16 + 0.84 * Math.max(0, Math.min(1, t));
-    };
-
-    // project any point in the same camera, for the sphere's guide circles
-    const project = (x0, y0, z0) => {
-      const x1 = x0 * cosY + z0 * sinY;
-      const z1 = z0 * cosY - x0 * sinY;
-      const y2 = y0 * cosP - z1 * sinP;
-      const z2 = z1 * cosP + y0 * sinP;
-      const depth = FOV * R / (FOV * R + z2);
-      return [cx + x1 * scale * depth, cy + y2 * scale * depth, z2];
-    };
-    const greatCircle = (tiltX, tiltZ, rad, alphaFront) => {
-      const STEPS = 96;
-      for (let k = 0; k < STEPS; k++){
-        const t0 = (k / STEPS) * 6.2832, t1 = ((k + 1) / STEPS) * 6.2832;
-        const p = (t) => {
-          const x = Math.cos(t) * rad, y = Math.sin(t) * rad * tiltX, z = Math.sin(t) * rad * tiltZ;
-          return project(x, y, z);
-        };
-        const A = p(t0), B = p(t1);
-        const front = ((A[2] + B[2]) / 2 + R) / (2 * R);
-        ctx.strokeStyle = dark
-          ? "rgba(190,232,255," + (alphaFront * (0.12 + front * 0.88)).toFixed(3) + ")"
-          : "rgba(60,48,30," + (alphaFront * 1.2 * (0.12 + front * 0.88)).toFixed(3) + ")";
-        ctx.lineWidth = 0.5 + front * 0.5;
-        ctx.beginPath(); ctx.moveTo(A[0], A[1]); ctx.lineTo(B[0], B[1]); ctx.stroke();
-      }
-    };
-    /* ---- volumetric cluster nebulae: each cluster's hub centroid carries a
-       big additive bloom in its own hue, so the cloud reads as lit gas rather
-       than flat dots. Depth drives both size and alpha. ---- */
-    ctx.globalCompositeOperation = "lighter";
-    for (let ci = 0; ci < CLUSTERS.length; ci++){
-      const hubs = g.hubs.filter(h => g.nodes[h].cluster === ci);
-      if (!hubs.length) continue;
-      let sx = 0, sy = 0, sz = 0, sd = 0;
-      for (const h of hubs){ sx += px[h]; sy += py[h]; sz += pz[h]; sd += pd[h]; }
-      const mx = sx / hubs.length, my = sy / hubs.length;
-      const depth = sd / hubs.length, front = ((sz / hubs.length) + R) / (2 * R);
-      const rad = Math.max(30, R * scale * 0.22 * depth);
-      const a = (dark ? 0.17 : 0.2) * (0.35 + front * 0.65);
-      this.stamp(bloom, this.glowSprite(CLUSTERS[ci][1], dark), mx, my, rad, a);
-    }
-    ctx.globalCompositeOperation = "source-over";
-
-    /* ---- starfield: a fixed dust shell outside the graph, projected in the
-       same camera so orbiting the cloud parallaxes it. ---- */
-    if (!this._dust){
-      const rnd = mulberry(77712);
-      const d = [];
-      for (let i = 0; i < 220; i++){
-        const u = rnd() * 2 - 1, th = rnd() * 6.2832, rr = R * (1.18 + rnd() * 0.55);
-        const sq = Math.sqrt(1 - u * u);
-        d.push([sq * Math.cos(th) * rr, u * rr, sq * Math.sin(th) * rr, 0.3 + rnd() * 0.7, rnd() * 6.28]);
-      }
-      this._dust = d;
-    }
-    ctx.globalCompositeOperation = dark ? "lighter" : "source-over";
-    const dustStep = heavy ? 1 : mid ? 2 : 3;
-    let dustI = 0;
-    for (const p of this._dust){
-      if (dustI++ % dustStep) continue;
-      const q = project(p[0], p[1], p[2]);
-      const front = (q[2] + R * 1.8) / (R * 3.6);
-      const tw = 0.55 + 0.45 * Math.sin(now / 900 + p[4]);
-      const a = (dark ? 0.5 : 0.3) * p[3] * tw * (0.25 + front * 0.75);
-      if (a <= 0.01) continue;
-      ctx.fillStyle = dark ? "rgba(214,238,255," + a.toFixed(3) + ")" : "rgba(70,55,35," + a.toFixed(3) + ")";
-      const rr = p[3] * (front > 0.55 ? 1.25 : 0.8);
-      ctx.fillRect(q[0] - rr / 2, q[1] - rr / 2, rr, rr);
-    }
-    ctx.globalCompositeOperation = "source-over";
-
-    greatCircle(0.06, 1, R * 0.40, 0.26);
-    greatCircle(0.9, 0.42, R * 0.40, 0.17);
-    greatCircle(0.06, 1, R * 0.95, 0.10);
-
-    /* ---- resting field, drawn back to front in depth bands ----
-       This is the most expensive layer (10.7k segments). The camera drifts a
-       fraction of a degree per frame, so it renders into its own layer on
-       alternate frames and is blitted on the others. */
-    let edgeCtx = ctx, blitOnly = false;
-    {
-      const ew = Math.round(box.width * dpr), eh = Math.round(box.height * dpr);
-      let L = this._edgeLayer;
-      if (!L || L.cv.width !== ew || L.cv.height !== eh){
-        const c2 = document.createElement("canvas");
-        c2.width = ew; c2.height = eh;
-        L = this._edgeLayer = {cv:c2, ctx:c2.getContext("2d"), frame:-1};
-      }
-      this._frameNo = (this._frameNo || 0) + 1;
-      if (this._frameNo % 2 === 0 && L.frame >= 0) blitOnly = true;
-      else {
-        L.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-        L.ctx.clearRect(0, 0, box.width, box.height);
-        edgeCtx = L.ctx;
-        L.frame = this._frameNo;
-      }
-    }
-    const BANDS = 7;
-    if (!this._bands){
-      this._bands = [];
-      for (let b = 0; b < BANDS; b++) this._bands.push(new Int32Array(g.edges.length));
-      this._bandN = new Int32Array(BANDS);
-    }
-    const bands = this._bands, bandN = this._bandN;
-    for (let b = 0; b < BANDS; b++) bandN[b] = 0;
-    const W = box.width, H = box.height, MARGIN = 80;
-    for (let e = 0; !blitOnly && e < g.edges.length; e++){
-      const ed = g.edges[e];
-      const ax = px[ed.a], ay = py[ed.a], bx = px[ed.b], by = py[ed.b];
-      // cheap screen-space cull: skip anything wholly outside the viewport
-      if ((ax < -MARGIN && bx < -MARGIN) || (ax > W + MARGIN && bx > W + MARGIN)
-       || (ay < -MARGIN && by < -MARGIN) || (ay > H + MARGIN && by > H + MARGIN)) continue;
-      const t = ((pz[ed.a] + pz[ed.b]) / 2 + R) / (2 * R);
-      const bi = Math.max(0, Math.min(BANDS - 1, Math.floor(t * BANDS)));
-      bands[bi][bandN[bi]++] = e;
-    }
-    for (let b = 0; b < BANDS; b++){
-      const t = (b + 0.5) / BANDS;
-      const c = CLUSTERS[b % CLUSTERS.length][1];
-      const cc = hexRGB(c);
-      // a faint cluster-hue wash mixed into the resting field, instead of flat grey
-      const mixT = 0.26 + t * 0.16;
-      const rr = Math.round(cc[0] * mixT * (dark ? 1 : 0.6) + (dark ? 150 : 40) * (1 - mixT));
-      const gg = Math.round(cc[1] * mixT * (dark ? 1 : 0.6) + (dark ? 164 : 32) * (1 - mixT));
-      const bb = Math.round(cc[2] * mixT * (dark ? 1 : 0.6) + (dark ? 176 : 20) * (1 - mixT));
-      if (blitOnly) break;
-      edgeCtx.strokeStyle = "rgba(" + rr + "," + gg + "," + bb + "," + (dark ? (0.045 + t * 0.17) : (0.022 + t * 0.1)).toFixed(3) + ")";
-      edgeCtx.lineWidth = dark ? 0.3 + t * 0.5 : 0.35 + t * 0.6;
-      const arr = bands[b], cnt = bandN[b];
-      if (!cnt) continue;
-      edgeCtx.beginPath();
-      for (let k = 0; k < cnt; k++){
-        const ed = g.edges[arr[k]];
-        edgeCtx.moveTo(px[ed.a], py[ed.a]); edgeCtx.lineTo(px[ed.b], py[ed.b]);
-      }
-      edgeCtx.stroke();
-    }
-    if (this._edgeLayer){
-      ctx.save();
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.drawImage(this._edgeLayer.cv, 0, 0);
-      ctx.restore();
-    }
-
-    // node order: far first, so near nodes occlude
-    // Bucketed depth order: O(n) per frame instead of an n log n sort.
-    const OB = 24;
-    if (!this._buckets){
-      this._buckets = [];
-      for (let b = 0; b < OB; b++) this._buckets.push([]);
-      this._order = new Array(n);
-    }
-    const bk = this._buckets;
-    for (let b = 0; b < OB; b++) bk[b].length = 0;
-    for (let i = 0; i < n; i++){
-      const t = (pz[i] + R) / (2 * R);
-      bk[Math.max(0, Math.min(OB - 1, OB - 1 - Math.floor(t * OB)))].push(i);
-    }
-    const order = this._order;
-    let oi = 0;
-    for (let b = 0; b < OB; b++){ const arr = bk[b]; for (let k = 0; k < arr.length; k++) order[oi++] = arr[k]; }
-    if (order.length !== oi) order.length = oi;
-
-    /* Nodes are filled in batches rather than one draw call each: within a depth
-       bucket the fog value barely varies, so every node of a cluster can share
-       one colour and one path. ~5,400 style changes per frame become ~200. */
-    if (!this._colCache) this._colCache = {};
-    const colCache = this._colCache;
-    const nodeColour = (cluster, fwQ) => {
-      const key = cluster + "|" + fwQ + "|" + (dark ? 1 : 0);
-      let v = colCache[key];
-      if (v) return v;
-      const fw = fwQ / 16;
-      if (cluster < 0){
-        v = dark ? "rgba(198,233,255," + (fw * 0.74).toFixed(3) + ")"
-                 : "rgba(70,58,42," + (fw * 0.62).toFixed(3) + ")";
-      } else {
-        const c = hexRGB(CLUSTERS[cluster][1]);
-        const mix = Math.max(0, (fw - 0.62) / 0.38);
-        v = dark
-          ? "rgba(" + Math.round(c[0] + (255 - c[0]) * mix * 0.55) + ","
-            + Math.round(c[1] + (255 - c[1]) * mix * 0.55) + ","
-            + Math.round(c[2] + (255 - c[2]) * mix * 0.55) + "," + (fw * 0.78).toFixed(3) + ")"
-          : "rgba(" + Math.round(c[0] * 0.56) + "," + Math.round(c[1] * 0.56) + ","
-            + Math.round(c[2] * 0.56) + "," + Math.min(1, 0.28 + fw * 0.8).toFixed(3) + ")";
-      }
-      colCache[key] = v;
-      return v;
-    };
-    const zoomK = 0.72 + cam.zoom * 0.28;
-    const speculars = [];
-    if (!this._batch) this._batch = new Map();
-    const batch = this._batch;
-    for (let b = 0; b < OB; b++){
-      const arr = bk[b];
-      if (!arr.length) continue;
-      batch.clear();
-      for (let k = 0; k < arr.length; k++){
-        const i = arr[k];
-        const nd = g.nodes[i];
-        if (nd.kind === "hub" || nd.kind === "sub") continue;
-        const x = px[i], y = py[i];
-        if (x < -40 || x > W + 40 || y < -40 || y > H + 40) continue;
-        const fw = fog(i);
-        if (fw < 0.02) continue;
-        const key = (nd.kind === "core" ? -1 : nd.cluster) * 32 + Math.round(fw * 16);
-        let list = batch.get(key);
-        if (!list){ list = []; batch.set(key, list); }
-        list.push(i);
-        if (fw > 0.92 && nd.r > 3) speculars.push(i);
-      }
-      batch.forEach((list, key) => {
-        const fwQ = ((key % 32) + 32) % 32;
-        const cluster = Math.round((key - fwQ) / 32);
-        ctx.fillStyle = nodeColour(cluster, fwQ);
-        ctx.beginPath();
-        for (let k = 0; k < list.length; k++){
-          const i = list[k];
-          const r = Math.max(0.3, g.nodes[i].r * (dark ? 0.56 : 0.64) * Math.pow(pd[i], 1.55) * zoomK);
-          if (r < 1.1) ctx.rect(px[i] - r, py[i] - r, r * 2, r * 2);
-          else { ctx.moveTo(px[i] + r, py[i]); ctx.arc(px[i], py[i], r, 0, 6.2832); }
-        }
-        ctx.fill();
-      });
-    }
-    // the nearest nodes catch a specular cap, drawn once as a group
-    if (speculars.length){
-      ctx.fillStyle = dark ? "rgba(255,255,255,.26)" : "rgba(255,255,255,.7)";
-      ctx.beginPath();
-      for (const i of speculars){
-        const r = Math.max(0.3, g.nodes[i].r * 0.56 * Math.pow(pd[i], 1.55) * zoomK);
-        ctx.moveTo(px[i] - r * 0.28 + r * 0.42, py[i] - r * 0.3);
-        ctx.arc(px[i] - r * 0.28, py[i] - r * 0.3, r * 0.42, 0, 6.2832);
-      }
-      ctx.fill();
-    }
-
-    ctx.lineCap = "round";
-    for (const s of this.searches){
-      if (s.delay > 0) continue;
-      const alive = 1 - s.fade;
-
-      for (const tr of s.traces){
-        const e = g.edges[tr.e];
-        const fw = (fog(e.a) + fog(e.b)) / 2;
-        ctx.globalAlpha = alive * fw * Math.max(0, 0.20 * (1 - tr.age / 1500));
-        ctx.strokeStyle = s.hue; ctx.lineWidth = 0.5 + fw * 0.5;
-        ctx.beginPath(); ctx.moveTo(px[e.a], py[e.a]); ctx.lineTo(px[e.b], py[e.b]); ctx.stroke();
-      }
-
-      ctx.shadowColor = s.hue;
-      for (const sp of s.sparks){
-        const e = g.edges[sp.e];
-        const fw = (fog(e.a) + fog(e.b)) / 2;
-        const dep = (pd[e.a] + pd[e.b]) / 2;
-        const ease = sp.t < 0.5 ? 2 * sp.t * sp.t : 1 - Math.pow(-2 * sp.t + 2, 2) / 2;
-        const tail = Math.max(0, ease - 0.46);
-        const ax = px[e.a], ay = py[e.a], bx = px[e.b], by = py[e.b];
-        const hx = ax + (bx - ax) * ease, hy = ay + (by - ay) * ease;
-        const tx = ax + (bx - ax) * tail, ty = ay + (by - ay) * tail;
-        const fadeIn = Math.min(1, sp.t * 6), fadeOut = 1 - Math.max(0, (sp.t - 0.7) / 0.3);
-        const vis = alive * Math.min(fadeIn, fadeOut) * fw;
-        ctx.globalAlpha = vis * 0.95;
-        ctx.strokeStyle = s.hue; ctx.lineWidth = (0.9 + fw * 1.1) * dep; ctx.shadowBlur = 9 * dep;
-        ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(hx, hy); ctx.stroke();
-        ctx.globalAlpha = vis;
-        ctx.fillStyle = dark ? "#ffffff" : s.hue; ctx.shadowBlur = 12 * dep;
-        ctx.beginPath(); ctx.arc(hx, hy, 1.4 * dep, 0, 6.2832); ctx.fill();
-      }
-      ctx.shadowBlur = 0; ctx.globalAlpha = 1;
-
-      if (s.phase !== "sweep"){
-        const lit = Math.min(s.path.length, Math.floor(s.pathReveal));
-        for (let i = 1; i < lit; i++){
-          const a = s.path[i - 1], b = s.path[i];
-          const fw = (fog(a) + fog(b)) / 2, dep = (pd[a] + pd[b]) / 2;
-          ctx.strokeStyle = pathInk;
-          ctx.globalAlpha = alive * fw * (dark ? 0.9 : 1);
-          ctx.lineWidth = (dark ? 1.5 : 2.0) * dep;
-          ctx.shadowColor = s.hue; ctx.shadowBlur = 11 * dep;
-          ctx.beginPath(); ctx.moveTo(px[a], py[a]); ctx.lineTo(px[b], py[b]); ctx.stroke();
-        }
-        ctx.shadowBlur = 0; ctx.globalAlpha = 1;
-        if (lit > 0 && lit < s.path.length){
-          const h = s.path[lit - 1];
-          ctx.fillStyle = pathInk; ctx.shadowColor = s.hue; ctx.shadowBlur = 16;
-          ctx.globalAlpha = alive * fog(h);
-          ctx.beginPath(); ctx.arc(px[h], py[h], 2.6 * pd[h], 0, 6.2832); ctx.fill();
-          ctx.shadowBlur = 0; ctx.globalAlpha = 1;
-        }
-      }
-
-      const ring = (idx, col, r) => {
-        ctx.globalAlpha = alive * 0.9 * fog(idx);
-        ctx.strokeStyle = col; ctx.lineWidth = 1.2 * pd[idx];
-        ctx.shadowColor = col; ctx.shadowBlur = 10;
-        ctx.beginPath(); ctx.arc(px[idx], py[idx], r * pd[idx], 0, 6.2832); ctx.stroke();
-        ctx.shadowBlur = 0; ctx.globalAlpha = 1;
-      };
-      ring(s.source, s.hue, 7 + Math.sin((this.clock + s.slot * 400) / 240) * 1.5);
-      if (s.phase !== "sweep") ring(s.target, matchInk, 8.5);
-    }
-
-    /* ---- scan plane: a slow sweep through the volume that ignites what it
-       passes, so the cloud reads as something being read ---- */
-    const scanZ = Math.sin(now / 5200) * R * 0.95;
-
-    /* ---- hubs and sub-hubs as lit spheres, far to near ---- */
-    for (const i of order){
-      const nd = g.nodes[i];
-      if (nd.kind === "leaf" || nd.kind === "core") continue;
-      const col = dark ? CLUSTERS[nd.cluster][1] : inkOf(CLUSTERS[nd.cluster][1]);
-      const fw = fog(i), dep = pd[i];
-      const r = Math.max(0.85, nd.r * (nd.kind === "hub" ? 0.42 : 0.37) * Math.pow(dep, 1.4));
-      if (nd.kind === "hub"){
-        // Only the nearest hubs carry any halo at all, and it is a soft
-        // brightening of the surrounding field rather than a lamp.
-        const hue = CLUSTERS[nd.cluster][1];
-        if (fw > 0.82) this.stamp(bloom, this.glowSprite(hue, dark), px[i], py[i], r * 2.4, (fw - 0.82) * 0.28);
-        const flash = Math.max(0, 1 - Math.abs(pz[i] - scanZ) / (R * 0.08));
-        if (flash > 0.02) this.stamp(bloom, this.glowSprite(hue, dark), px[i], py[i], r * 3.2, flash * 0.1);
-        ctx.globalAlpha = dark ? 0.45 + fw * 0.45 : 0.6 + fw * 0.4;
-        ctx.fillStyle = col;
-        ctx.beginPath(); ctx.arc(px[i], py[i], r, 0, 6.2832); ctx.fill();
-        if (fw > 0.86){
-          ctx.globalAlpha = (fw - 0.86) * 2;
-          ctx.fillStyle = "rgba(255,255,255,.4)";
-          ctx.beginPath(); ctx.arc(px[i] - r * 0.26, py[i] - r * 0.28, r * 0.38, 0, 6.2832); ctx.fill();
-        }
-      } else {
-        ctx.globalAlpha = fw * 0.5;
-        ctx.fillStyle = dark ? "rgba(226,242,255,.36)" : "rgba(40,32,20,.55)";
-        ctx.beginPath(); ctx.arc(px[i], py[i], r, 0, 6.2832); ctx.fill();
-      }
-      ctx.shadowBlur = 0;
-    }
-    ctx.globalAlpha = 1;
-
-    /* ---- leader-line labels on the front hub of each cluster ---- */
-    ctx.globalCompositeOperation = "source-over";
-    ctx.font = dark ? "500 10px 'IBM Plex Mono', ui-monospace, monospace" : "600 10.5px Geist, system-ui, sans-serif";
-    ctx.textBaseline = "middle";
-    for (let ci = 0; ci < CLUSTERS.length; ci++){
-      const hubs = g.hubs.filter(h => g.nodes[h].cluster === ci);
-      if (!hubs.length) continue;
-      let i = hubs[0];
-      for (const h of hubs) if (pz[h] > pz[i]) i = h;
-      const f = fog(i);
-      if (f < 0.66) continue;
-      const col = dark ? CLUSTERS[ci][1] : inkOf(CLUSTERS[ci][1]), a = Math.min(1, (f - 0.66) / 0.26);
-      const right = px[i] < cx;
-      const lx = px[i] + (right ? 15 : -15), ly = py[i] - 13;
-      ctx.globalAlpha = a * (dark ? 0.45 : 0.75);
-      ctx.strokeStyle = col; ctx.lineWidth = dark ? 0.8 : 1;
-      ctx.beginPath();
-      ctx.moveTo(px[i], py[i]); ctx.lineTo(lx, ly); ctx.lineTo(lx + (right ? 24 : -24), ly);
-      ctx.stroke();
-      ctx.globalAlpha = a * 0.92;
-      ctx.textAlign = right ? "left" : "right";
-      const lbl = CLUSTERS[ci][0].toUpperCase(), tx = lx + (right ? 29 : -29);
-      if (!dark){
-        ctx.lineJoin = "round"; ctx.lineWidth = 4; ctx.strokeStyle = "rgba(253,252,248,.92)";
-        ctx.strokeText(lbl, tx, ly);
-      }
-      ctx.fillStyle = dark ? "rgba(238,247,255,.94)" : "rgba(20,18,16,.94)";
-      ctx.fillText(lbl, tx, ly);
-    }
-    ctx.globalAlpha = 1;
-    ctx.textAlign = "left";
-
-    // the bloom bed, scaled back over the scene (dark themes only — on paper the
-    // stamps already landed source-over)
-    if (!bloom.light){
-      ctx.globalCompositeOperation = "lighter";
-      ctx.globalAlpha = 0.34;
-      ctx.drawImage(bloom.cv, 0, 0, box.width, box.height);
-      ctx.globalAlpha = 1;
-      ctx.globalCompositeOperation = "source-over";
-    }
-    this._cost = this._cost * 0.88 + (performance.now() - tStart) * 0.12;
-
-    // vignette: pulls the eye to the centre of the cloud the way a long lens would
-    const vig = ctx.createRadialGradient(cx, cy, Math.min(box.width, box.height) * 0.28,
-                                         cx, cy, Math.max(box.width, box.height) * 0.78);
-    vig.addColorStop(0, "rgba(0,0,0,0)");
-    vig.addColorStop(1, dark ? "rgba(0,0,0,.5)" : "rgba(120,95,60,.07)");
-    ctx.fillStyle = vig;
-    ctx.fillRect(0, 0, box.width, box.height);
-  }
-
-  /* Orbit and zoom. Pointer state lives on the instance, not in React state,
-     so dragging never triggers a re-render. */
-  bindGraphInput(cv){
-    if (cv._pulseBound) return;
-    cv._pulseBound = true;
-    const cam = this.cam || (this.cam = {yaw:0, pitch:0.42, zoom:1, vy:0, vp:0, drag:false, spin:0});
-    let lx = 0, ly = 0, id = null;
-    cv.style.cursor = "grab";
-    cv.style.touchAction = "none";
-    cv.addEventListener("pointerdown", (e) => {
-      id = e.pointerId; cam.drag = true; lx = e.clientX; ly = e.clientY;
-      cam.vy = 0; cam.vp = 0;
-      cv.style.cursor = "grabbing";
-      try { cv.setPointerCapture(id); } catch (err) {}
-    });
-    cv.addEventListener("pointermove", (e) => {
-      if (!cam.drag || e.pointerId !== id) return;
-      const dx = e.clientX - lx, dy = e.clientY - ly;
-      lx = e.clientX; ly = e.clientY;
-      cam.yaw += dx * 0.006;
-      cam.pitch += dy * 0.006;
-      cam.vy = dx * 0.0016; cam.vp = dy * 0.0016;
-    });
-    const release = (e) => {
-      if (id !== null && e && e.pointerId !== id) return;
-      cam.drag = false; id = null; cv.style.cursor = "grab";
-    };
-    cv.addEventListener("pointerup", release);
-    cv.addEventListener("pointercancel", release);
-    cv.addEventListener("wheel", (e) => {
-      e.preventDefault();
-      const k = Math.pow(0.9988, e.deltaY);
-      cam.zoom = Math.max(0.45, Math.min(6, cam.zoom * k));
-    }, {passive:false});
-    cv.addEventListener("dblclick", () => {
-      cam.yaw = 0; cam.pitch = 0.42; cam.zoom = 1; cam.vy = 0; cam.vp = 0; cam.spin = 0;
-    });
-  }
-
-  refreshStats(){
-    if (!this.searches) return;
-    const now = Math.floor((this.clock || 0) / 1000);
-    if (now === this._lastStat) return;
-    this._lastStat = now;
-    try { this.setState({gTick: now}); } catch (e) {}
   }
 
   // Split-flap board. Each tile keeps the character it last showed, so a change
@@ -1013,59 +145,6 @@ export default class PulseLogic extends DCLogic {
     return out;
   }
 
-  /* The brief is a two-question interview: you say the job, it asks what to
-     cover and when it should land, then turns the answers into tasks. */
-  sendBrief(){
-    const text = (this.state.briefDraft || "").trim();
-    if (!text) return;
-    this.setState(prev => {
-      const thread = (prev.briefThread || []).slice();
-      const asked = thread.filter(m => m.kind === "card").length;
-      if (!thread.length) thread.push({kind:"msg", role:"agent", text:"Good to meet you. What is the main thing you want help with?"});
-      thread.push({kind:"msg", role:"you", text});
-      if (asked < BRIEF_QUESTIONS.length){
-        thread.push({kind:"msg", role:"agent",
-          text: asked === 0
-            ? "\u201c" + text + "\u201d. I can do that. First, what should it cover?"
-            : "Noted. One more: when should it land?"});
-        thread.push({kind:"card", q:asked, done:false});
-      } else {
-        thread.push({kind:"msg", role:"agent", text:"Added. Train me and I will write my own prompt from the records you granted."});
-      }
-      return {briefThread:thread, briefDraft:""};
-    });
-  }
-  pickBrief(qi, label){
-    this.setState(prev => {
-      const picks = Object.assign({}, prev.briefPicks || {});
-      const list = (picks[qi] || []).slice();
-      const at = list.indexOf(label);
-      if (at > -1) list.splice(at, 1); else list.push(label);
-      picks[qi] = list;
-      return {briefPicks:picks};
-    });
-  }
-  confirmBrief(qi){
-    this.setState(prev => {
-      const picks = (prev.briefPicks || {})[qi] || [];
-      const thread = prev.briefThread.map(m => m.kind === "card" && m.q === qi ? Object.assign({}, m, {done:true}) : m);
-      const spec = Object.assign({}, prev.agentSpec);
-      const tasks = (spec.tasks || []).slice();
-      if (qi === 0 && picks.length) tasks.push({title:"Daily briefing", meta:"Covers " + picks.join(", ").toLowerCase()});
-      if (qi === 1 && picks.length){
-        if (tasks.length) tasks[tasks.length - 1] = Object.assign({}, tasks[tasks.length - 1], {meta: tasks[tasks.length - 1].meta + " · " + picks[0].toLowerCase()});
-        else tasks.push({title:"Scheduled run", meta:picks[0].toLowerCase()});
-      }
-      spec.tasks = tasks;
-      if (qi + 1 < BRIEF_QUESTIONS.length){
-        thread.push({kind:"msg", role:"agent", text:"Got it. When should it land?"});
-        thread.push({kind:"card", q:qi + 1, done:false});
-      } else {
-        thread.push({kind:"msg", role:"agent", text:"That is enough to work from. Train me and I will write my own prompt from the records you granted."});
-      }
-      return {briefThread:thread, agentSpec:spec};
-    });
-  }
   /* Tuning by prompt: the change is described in words and lands on the pinned
      prompt, so the agent's behaviour and its prompt never drift apart. */
   /* KPI figures count in from zero whenever the filter changes, so a switch
@@ -1133,21 +212,6 @@ export default class PulseLogic extends DCLogic {
     }));
   }
 
-  startTraining(){
-    clearInterval(this._trainTimer);
-    this.setState({training:true, trained:false, trainPhase:0});
-    this._trainTimer = setInterval(() => {
-      this.setState(prev => {
-        const next = (prev.trainPhase || 0) + 1;
-        if (next >= TRAIN_PHASES.length){
-          clearInterval(this._trainTimer);
-          return {trainPhase:TRAIN_PHASES.length, training:false, trained:true};
-        }
-        return {trainPhase:next};
-      });
-    }, 1150);
-  }
-
   openPalette(){
     this._palOpenedAt = Date.now();
     this.setState({paletteOpen:true, showNotifs:false, query:"", palSel:0, palScope:"All"});
@@ -1162,38 +226,9 @@ export default class PulseLogic extends DCLogic {
       if (nav && window.ResizeObserver){ this._railRO = new ResizeObserver(() => this.syncRailThumb()); this._railRO.observe(nav); } }, 50);
     this.seedActivity();
     if (this.state.page === "Dashboard") this.startKpiCount();
-    this._actTimer = setInterval(() => { if (this.state.page === "Activity") this.tickActivity(); }, 700);
     this._clockTimer = setInterval(() => { if (this.state.page === "Home") this.forceUpdate(); }, 1000);
     this._flapBoot = setInterval(() => this.forceUpdate(), 70);
     setTimeout(() => clearInterval(this._flapBoot), 1500);
-    // One frame driver, fed by rAF where it runs and by a timer where it does not
-    // Warm the graph up in idle time: by the time the Ontology tab is opened the
-    // nodes, edges and adjacency already exist, so the first frame paints.
-    const warm = () => { if (!this.graph){ this.graph = buildGraph(); this.planSearch(); } };
-    if (typeof requestIdleCallback === "function") requestIdleCallback(warm, {timeout:2500});
-    else this._warmTimer = setTimeout(warm, 1200);
-
-    // (throttled or hidden frames), so the graph is never left unpainted.
-    let last = performance.now();
-    this._frame = () => this.graphFrame();
-    const loop = () => {
-      const onGraph = this.state.page === "Records" && this.state.recSection === "ontology";
-      if (onGraph){ this._raf = requestAnimationFrame(loop); this._frame(); }
-      else { this._raf = null; this.canvas = null; }
-    };
-    this._startLoop = (force) => {
-      if (force) { cancelAnimationFrame(this._raf); this._raf = null; }
-      if (!this._raf) this._raf = requestAnimationFrame(loop);
-    };
-    // A watchdog, not just a poll: a stale _raf handle from a previous mount
-    // used to leave the loop permanently unscheduled, so restart when the
-    // ontology is open and no frame has landed for a while.
-    this._fallback = setInterval(() => {
-      if (this.state.page !== "Records" || this.state.recSection !== "ontology") return;
-      const stale = !this._beat || performance.now() - this._beat > 600;
-      this._startLoop(stale);
-    }, 250);
-    this._startLoop(true);
     this._resize = () => this.setState({w: window.innerWidth});
     window.addEventListener("resize", this._resize);
     this._key = (e) => {
@@ -1213,7 +248,7 @@ export default class PulseLogic extends DCLogic {
     };
     window.addEventListener("paste", this._paste);
   }
-  componentWillUnmount(){ if (this._jodzUnsub) this._jodzUnsub(); window.removeEventListener("paste", this._paste); window.removeEventListener("resize", this._resize); window.removeEventListener("keydown", this._key); clearInterval(this._t); clearInterval(this._clockTimer); clearInterval(this._flapBoot); cancelAnimationFrame(this._raf); clearInterval(this._fallback); clearInterval(this._actTimer); clearInterval(this._kpiTimer); }
+  componentWillUnmount(){ if (this._jodzUnsub) this._jodzUnsub(); window.removeEventListener("paste", this._paste); window.removeEventListener("resize", this._resize); window.removeEventListener("keydown", this._key); clearInterval(this._t); clearInterval(this._clockTimer); clearInterval(this._flapBoot); clearInterval(this._kpiTimer); }
 
   ask(q){
     const a = answerFor(q);
@@ -1260,7 +295,6 @@ export default class PulseLogic extends DCLogic {
       return {[key]: list};
     });
   }
-  setSpec(patch){ this.setState(prev => ({agentSpec: Object.assign({}, prev.agentSpec, patch)})); }
   toggleSpecList(key, value){
     this.setState(prev => {
       const list = prev.agentSpec[key].slice(), i = list.indexOf(value);
@@ -1274,15 +308,6 @@ export default class PulseLogic extends DCLogic {
       miniThread: prev.miniThread.concat([{role:"user", text:q}, {role:"helios", text:a.text}]),
       miniDraft: ""
     }));
-  }
-  addWorkTask(){
-    this.setState(prev => {
-      const title = prev.newTask.trim();
-      if (!title) return {newTask:""};
-      return {newTask:"", addedTasks: [{id:"n" + Date.now(), title, status:"Not started",
-        priority:prev.newPriority, who:"AD", due:"No due date", late:false,
-        client:"No client", day:"Any day", mins:"Mins", view:"All tasks"}].concat(prev.addedTasks)};
-    });
   }
   addCustom(){
     this.setState(prev => {
@@ -1303,54 +328,7 @@ export default class PulseLogic extends DCLogic {
     });
   }
 
-  /* One graph frame. Safe to call from anywhere: it no-ops unless the ontology
-     is on screen, and it builds the graph on first need. */
-  graphFrame(){
-    if (document.hidden) return;
-    const t = performance.now();
-    const dt = Math.min(48, t - (this._lastFrame || t - 16));
-    if (dt < 8) return;
-    this._lastFrame = t;
-    // The canvas mounts and unmounts with the tab, and a ref on a plain element
-    // is not wired by the template compiler, so resolve it from the DOM. Its
-    // presence — not component state — is what says the ontology is on screen.
-    if (!this.canvas || !this.canvas.isConnected){
-      this.canvas = document.querySelector("canvas[data-onto-graph]");
-    }
-    if (!this.canvas || !this.canvas.isConnected){ this.canvas = null; return; }
-    if (!this.graph) this.graph = buildGraph();
-    if (!this.searches){
-      try { this.planSearch(); } catch (e) { this.searches = []; }
-    }
-    this.bindGraphInput(this.canvas);
-    this.advance(dt);
-    this.drawGraph();
-    this.refreshStats();
-    this._beat = performance.now();
-  }
-
   renderVals(){
-    /* The graph is driven per instance from render, not from a closure created
-       in componentDidMount: the runtime can render an instance that never ran
-       mount, and a rAF scheduled from that realm never fires. A timer owned by
-       whichever instance is actually showing the ontology always does. */
-    if (!this._gTimer){
-      const tick = () => {
-        const t0 = performance.now();
-        try { this.graphFrame(); } catch (e) { /* one bad frame must not stop the rest */ }
-        const cost = performance.now() - t0;
-        this._gTimer = setTimeout(tick, Math.max(16, Math.min(60, cost * 1.2)));
-      };
-      this._gTimer = setTimeout(tick, 16);
-      setTimeout(() => {
-        if (!this.graph){ try { this.graph = buildGraph(); } catch (e) {} }
-        if (this.graph && !this._legendCounts){
-          const c = new Array(CLUSTERS.length).fill(0);
-          for (const nd of this.graph.nodes) if (nd.kind !== "core" && nd.cluster >= 0) c[nd.cluster]++;
-          this._legendCounts = c;
-        }
-      }, 450);
-    }
     const st = this.state, page = st.page;
     const openKeys = ORDER.filter(k => !st.resolved[k]);
 
@@ -1424,389 +402,11 @@ export default class PulseLogic extends DCLogic {
          leave: () => { if (this.state.railHov === idx) this.setState({railHov:null}); this.unhover(idx); },
          go: () => this.go(n.page)});
 
-    const workSec = WORK_SECTIONS.find(s => s.id === st.workSection) || WORK_SECTIONS[0];
-    const workView = st.workViews[workSec.id] || workSec.views[0];
     const allWorkTasks = st.addedTasks.concat(jodzTasks().map(t => ({id:t.id, title:t.title, status: t.status === "Done" ? "Done" : t.priority === "High" ? "In progress" : "Not started",
       priority:t.priority, who:t.whoInitials, due:(t.late ? "Overdue · " : "Due ") + t.dueLabel, late:t.late, client:linkLabelOf(t.link), day:"Thread " + t.thread,
       mins:jodzStaff(t.owner).name, view: t.due <= "2026-09-28" ? "Due soon" : "Open", high: t.priority === "High", done: t.status === "Done", open:t.open, jodz:true})));
     const isDoneW = (t) => t.jodz ? !!t.done : !!(st.done[t.id] !== undefined ? st.done[t.id] : t.done);
     const openWork = allWorkTasks.filter(t => !isDoneW(t));
-    /* ---- the operations control room ---- */
-    const opsOn = (w) => st.opsOff[w.id] === undefined ? w.on : !st.opsOff[w.id];
-    const opsStatusOf = (w) => opsOn(w) ? w.status : "paused";
-    const STATUS_TINT = {
-      healthy:[GREEN, "var(--ok-soft)", "Healthy"],
-      approval:[AMBER, "var(--warn-soft)", "Approval needed"],
-      failed:[RED, "var(--bad-soft)", "Failed"],
-      paused:[DIM, "var(--track)", "Paused"]
-    };
-    const KIND_LABEL = {routine:"AGENT ROUTINE", automation:"AUTOMATION", report:"SCHEDULED REPORT", task:"RECURRING TASK"};
-    const opsMatch = (w) => st.opsFilter === "all" ? true
-      : st.opsFilter === "active" ? opsOn(w)
-      : st.opsFilter === "attention" ? (w.status === "failed" || w.status === "approval")
-      : st.opsFilter === "approval" ? w.status === "approval"
-      : st.opsFilter === "failed" ? w.status === "failed"
-      : st.opsFilter === "dueToday" ? /tomorrow|:|today/i.test(w.next)
-      : w.kind === st.opsFilter;
-    const opsVisible = OPS_DEFS.filter(opsMatch);
-    const savedHours = OPS_DEFS.reduce((n, w) => n + parseInt(w.saved, 10), 0);
-
-    const opsModel = {
-      columns: ["Workflow", "Trigger", "Owner", "Next run", "Status", ""],
-      empty: opsVisible.length === 0,
-      create: () => this.setState({opsBuilderOpen:true, opsBuilderMode:"workflow", builderText:"", builderGenerated:false}),
-      schedule: () => this.setState({opsBuilderOpen:true, opsBuilderMode:"schedule", builderText:"", builderGenerated:false}),
-      teach: () => this.setState({opsBuilderOpen:true, opsBuilderMode:"teach", builderText:"", builderGenerated:false}),
-      summary: [
-        ["Active", String(OPS_DEFS.filter(opsOn).length), "active"],
-        ["Due today", String(OPS_DEFS.filter(w => /tomorrow|:|today/i.test(w.next)).length), "dueToday"],
-        ["Needs attention", String(OPS_DEFS.filter(w => w.status === "failed" || w.status === "approval").length), "attention"],
-        ["Time saved", savedHours + "h", "all"]
-      ].map(s => {
-        const on = st.opsFilter === s[2] && s[2] !== "all";
-        return {label:s[0].toUpperCase(), value:s[1],
-          active: on, inactive: !on,
-          valueColor: s[2] === "attention" ? AMBER : INK,
-          pick: () => this.setState({opsFilter: st.opsFilter === s[2] ? "all" : s[2]})};
-      }),
-      filters: OPS_FILTERS.map(fl => {
-        const on = st.opsFilter === fl[0];
-        const count = fl[0] === "all" ? OPS_DEFS.length
-          : fl[0] === "approval" ? OPS_DEFS.filter(w => w.status === "approval").length
-          : fl[0] === "failed" ? OPS_DEFS.filter(w => w.status === "failed").length
-          : OPS_DEFS.filter(w => w.kind === fl[0]).length;
-        return {label:fl[1], count:String(count), active:on, inactive:!on,
-          pick: () => this.setState({opsFilter:fl[0]})};
-      }),
-      rows: opsVisible.map(w => {
-        const tint = STATUS_TINT[opsStatusOf(w)];
-        return {
-          name:w.name, trigger:w.trigger, owner:w.owner, ownerInitials:w.initials,
-          nextRun: opsOn(w) ? w.next : "Paused", lastResult:w.last,
-          kindLabel: KIND_LABEL[w.kind], triggerKind: w.triggerKind,
-          status: tint[2], statusColor: tint[0],
-          statusStyle: "padding:3px 10px;border-radius:var(--r-sm,9px);font-size:11px;width:fit-content;background:" + tint[1] + ";color:" + tint[0],
-          rate: w.rate + "%",
-          ownerChip: "width:24px;height:24px;flex:none;border-radius:" + (w.ownerKind === "agent" ? "50%" : "8px")
-            + ";background:" + (w.ownerKind === "agent" ? "var(--accent)" : "var(--track)")
-            + ";color:" + (w.ownerKind === "agent" ? "#0b0c0b" : BODY)
-            + ";display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:600",
-          trackBg: opsOn(w) ? "var(--accent)" : "var(--track)",
-          knobLeft: opsOn(w) ? "19px" : "3px",
-          knobBg: opsOn(w) ? "var(--on-accent)" : DIM,
-          rowBg: st.opsOpen === w.id ? "var(--surface-2)" : "transparent",
-          open: () => this.setState({opsOpen:w.id}),
-          toggle: (e) => { if (e) e.stopPropagation();
-            this.setState(prev => ({opsOff: Object.assign({}, prev.opsOff, {[w.id]: opsOn(w)})})); }
-        };
-      })
-    };
-
-    const DAY_LOAD = {24:2, 25:3, 26:4, 27:5, 28:3, 29:0, 30:1, 31:2};
-    // A denser, Google-Calendar-style spread of events across the whole month —
-    // not just the last week — so the month grid actually has something in it.
-    const MONTH_EVENTS = [
-      [2,"o1"], [3,"o6"], [5,"o2"], [6,"o4"], [9,"o3"], [10,"o5"], [12,"o1"], [13,"o6"],
-      [16,"o2"], [17,"o4"], [19,"o3"], [20,"o5"], [23,"o1"], [24,"o2"], [24,"o5"],
-      [25,"o3"], [25,"o6"], [26,"o1"], [26,"o4"], [26,"o5"], [26,"o2"],
-      [27,"o1"], [27,"o2"], [27,"o3"], [27,"o4"], [27,"o5"],
-      [28,"o2"], [28,"o6"], [28,"o3"], [29,"o1"],
-      [30,"o4"], [30,"o1"], [31,"o5"], [31,"o2"]
-    ].map(e => { const w = OPS_DEFS.find(x => x.id === e[1]);
-      return w ? {day:e[0], name:w.name, color:STATUS_TINT[opsStatusOf(w)][0]} : null; }).filter(Boolean);
-    const eventsFor = (d) => MONTH_EVENTS.filter(e => e.day === d);
-
-    const calModel = {
-      monthLabel: st.opsScope === "week" ? "This week · 26 Aug" : "August 2026",
-      hint: "Everything Pulse will do on its own, and when.",
-      load: (st.opsOrder || ["o5","o2","o3","o10","o4","o6","o9","o8"]).length + " routines",
-      scopes: [["week","Week"],["month","Month"]].map(s => ({label:s[1],
-        style: "height:26px;padding:0 12px;border:0;border-radius:var(--r-seg,7px);cursor:pointer;font-size:11.5px;"
-          + (st.opsScope === s[0] ? "background:var(--pill-bg);color:var(--pill-ink);font-weight:500;box-shadow:0 2px 5px rgba(0,0,0,.34),0 6px 16px rgba(0,0,0,.22),inset 0 1px 0 rgba(255,255,255,.5);" : "background:none;color:" + DIM),
-        pick: () => this.setState({opsScope:s[0]})})),
-      dayNames: ["MON","TUE","WED","THU","FRI","SAT","SUN"],
-      cellH: st.opsScope === "week" ? "height:118px" : "height:96px",
-      days: (st.opsScope === "week" ? [24,25,26,27,28,29,30]
-        : [null,null,null,null,null,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31]
-      ).map(d => {
-        if (d === null) return {date:"", pick:() => {}, chips:[], hasMore:false,
-          cellStyle: st.opsScope === "week" ? "height:118px" : "height:96px" + ";border-radius:var(--r-sm,9px);background:none;border:1px dashed var(--border)"};
-        const today = d === 26, sel = st.opsDay === d && !today;
-        const evs = eventsFor(d);
-        const shown = evs.slice(0, st.opsScope === "week" ? 4 : 2);
-        const more = evs.length - shown.length;
-        return {date:String(d),
-          cellStyle: (st.opsScope === "week" ? "height:118px" : "height:96px")
-            + ";border-radius:8px;cursor:pointer;padding:7px 8px;display:flex;flex-direction:column;gap:4px;overflow:hidden;"
-            + "transition:border-color .2s var(--ease),background .2s var(--ease);"
-            + (today ? "background:var(--accent-faint);border:1.5px solid var(--accent)"
-              : sel ? "background:var(--surface-2);border:1.5px solid var(--border-strong)"
-              : "background:var(--surface-2);border:1px solid var(--border)"),
-          numStyle: "flex:none;width:20px;height:20px;border-radius:7px;display:flex;align-items:center;justify-content:center;"
-            + "font-family:var(--mono);font-size:11.5px;"
-            + (today ? "background:var(--accent-fill,var(--accent));color:var(--on-accent);box-shadow:var(--accent-glow,none);font-weight:600" : "color:var(--body)"),
-          chips: shown.map(e => ({label:e.name,
-            style: "display:flex;align-items:center;gap:5px;padding:2px 6px;border-radius:var(--chip-r,6px);background:var(--surface);"
-              + "font-size:10px;line-height:1.3;color:var(--body);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
-              + "border-left:2.5px solid " + e.color})),
-          hasMore: more > 0, moreLabel: "+" + more + " more",
-          pick: () => this.setState({opsDay:d})};
-      }),
-      monthTitle: "August 2026",
-      monthDays: [null,null,null,null,null,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31].map(d => {
-        if (d === null) return {date:"", pick:() => {}, chips:[], hasMore:false, moreLabel:"",
-          cellStyle:"min-height:104px;border-radius:var(--r-sm,9px);background:none;border:1px dashed var(--border)"};
-        const today = d === 26, sel = st.opsDay === d && !today;
-        const evs = eventsFor(d);
-        const shown = evs.slice(0, 3);
-        const more = evs.length - shown.length;
-        return {date:String(d),
-          cellStyle: "min-height:104px;border-radius:var(--r-sm,9px);cursor:pointer;padding:8px 9px;display:flex;flex-direction:column;gap:4px;overflow:hidden;"
-            + "transition:border-color .2s var(--ease),background .2s var(--ease);"
-            + (today ? "background:var(--accent-faint);border:1.5px solid var(--accent)"
-              : sel ? "background:var(--surface-2);border:1.5px solid var(--border-strong)"
-              : "background:var(--surface-2);border:1px solid var(--border)"),
-          numStyle: "flex:none;width:21px;height:21px;border-radius:7px;display:flex;align-items:center;justify-content:center;"
-            + "font-family:var(--mono);font-size:12px;"
-            + (today ? "background:var(--accent-fill,var(--accent));color:var(--on-accent);box-shadow:var(--accent-glow,none);font-weight:600" : "color:var(--body)"),
-          chips: shown.map(e => ({label:e.name,
-            style: "display:flex;align-items:center;gap:5px;padding:3px 7px;border-radius:var(--chip-r,6px);background:var(--surface);"
-              + "font-size:10.5px;line-height:1.3;color:var(--body);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
-              + "border-left:2.5px solid " + e.color})),
-          hasMore: more > 0, moreLabel: "+" + more + " more",
-          pick: () => this.setState({opsDay:d})};
-      }),
-      legend: [{label:"Agent routine", bg:"var(--accent)"}, {label:"Automation", bg:"var(--neutral)"}, {label:"Nothing scheduled", bg:"var(--track)"}],
-      weekStats: (() => {
-        const sched = OPS_DEFS.filter(w => w.triggerKind === "schedule");
-        const runs = Object.keys(DAY_LOAD).reduce((n, k) => n + DAY_LOAD[k], 0);
-        const hours = OPS_DEFS.reduce((n, w) => n + (parseInt(w.saved, 10) || 0), 0);
-        const busiest = Object.keys(DAY_LOAD).reduce((a, b) => DAY_LOAD[b] > DAY_LOAD[a] ? b : a, "24");
-        return [
-          {label:"Runs this week", value:String(runs), note:"across " + sched.length + " routines"},
-          {label:"Busiest day", value:busiest + " Aug", note:DAY_LOAD[busiest] + " scheduled runs"},
-          {label:"Needs a person", value:String(OPS_DEFS.filter(w => opsStatusOf(w) === "approval").length), note:"waiting on an approval"},
-          {label:"Failing", value:String(OPS_DEFS.filter(w => opsStatusOf(w) === "failed").length), note:"routines to look at"},
-          {label:"Time saved", value:hours + "h", note:"per month, all routines"},
-          {label:"Median run", value:"31s", note:"across the last 200 runs"}
-        ];
-      })(),
-      nextUp: OPS_DEFS.filter(w => w.triggerKind === "schedule" && opsOn(w)).slice(0, 4).map(w => ({
-        name:w.name, when:w.next, owner:w.owner,
-        color: STATUS_TINT[opsStatusOf(w)][0]
-      })),
-      workload: "Expected workload this week: " + Object.keys(DAY_LOAD).reduce((n, k) => n + DAY_LOAD[k], 0) + " runs across " + OPS_DEFS.filter(w => w.triggerKind === "schedule").length + " routines",
-      recurring: OPS_DEFS.filter(w => w.triggerKind === "schedule").map(w => {
-        const on = opsOn(w);
-        return {name:w.name, cadence:w.trigger, owner:w.owner, next: on ? w.next : "Paused",
-          tileStyle: "width:30px;height:30px;flex:none;border-radius:var(--r-sm,11px);display:flex;align-items:center;justify-content:center;"
-            + (on ? "background:var(--accent-faint);color:var(--accent)" : "background:var(--track);color:" + DIM),
-          trackBg: on ? "var(--accent)" : "var(--track)",
-          knobLeft: on ? "19px" : "3px",
-          knobBg: on ? "var(--on-accent)" : DIM,
-          toggle: () => this.setState(prev => ({opsOff: Object.assign({}, prev.opsOff, {[w.id]: on})}))};
-      }),
-      agendaTitle: st.opsDay === 26 ? "Today" : "Wed " + st.opsDay + " Aug",
-      dragHint: true,
-      agenda: (st.opsOrder || ["o5","o2","o3","o10","o4","o6","o9","o8"]).map(id => OPS_DEFS.find(w => w.id === id)).filter(Boolean).map(w => ({
-        time: (w.trigger.match(/\d{2}:\d{2}/) || ["-"])[0],
-        name:w.name, owner:w.owner,
-        color: STATUS_TINT[opsStatusOf(w)][0],
-        opacity: st.opsDrag === w.id ? "0.5" : "1",
-        drag: () => this.setState({opsDrag:w.id}),
-        over: (e) => e.preventDefault(),
-        drop: (e) => { e.preventDefault();
-          this.setState(prev => {
-            const order = (prev.opsOrder || ["o5","o2","o3","o10","o4","o6","o9","o8"]).slice();
-            const from = order.indexOf(prev.opsDrag), to = order.indexOf(w.id);
-            if (from < 0 || to < 0 || from === to) return {opsDrag:null};
-            order.splice(to, 0, order.splice(from, 1)[0]);
-            return {opsOrder:order, opsDrag:null};
-          }); }
-      }))
-    };
-
-    const detailDef = OPS_DEFS.find(w => w.id === st.opsOpen);
-    const detailModel = detailDef ? (() => {
-      const tint = STATUS_TINT[opsStatusOf(detailDef)];
-      return {
-        open:true, name:detailDef.name, kindLabel:KIND_LABEL[detailDef.kind],
-        status:tint[2], statusStyle: "padding:3px 10px;border-radius:var(--r-sm,9px);font-size:11px;background:" + tint[1] + ";color:" + tint[0],
-        what:detailDef.what, why:detailDef.why,
-        close: () => this.setState({opsOpen:null}),
-        facts: [
-          {k:"OWNER", v:detailDef.owner, color:INK},
-          {k:"TRIGGER", v:detailDef.trigger, color:INK},
-          {k:"NEXT RUN", v: opsOn(detailDef) ? detailDef.next : "Paused", color:INK},
-          {k:"LAST RUN", v:detailDef.runs[0][0], color:INK},
-          {k:"SUCCESS RATE", v:detailDef.rate + "%", color: detailDef.rate > 90 ? GREEN : AMBER},
-          {k:"TIME SAVED", v:detailDef.saved, color:INK}
-        ],
-        steps: detailDef.steps.map((s, i, arr) => ({
-          n: String(i + 1), verb:s[0], detail:s[1], isGate: s[2] === "gate",
-          gateColor: AMBER,
-          dotBg: s[2] === "gate" ? "var(--warn-soft)" : i === 0 ? "var(--accent)" : "var(--surface-2)",
-          dotBorder: s[2] === "gate" ? "var(--warn-soft)" : i === 0 ? "var(--accent)" : "var(--border)",
-          dotInk: i === 0 ? "var(--on-accent)" : s[2] === "gate" ? AMBER : BODY,
-          lineStyle: "flex:1;width:1px;min-height:14px;background:" + (i === arr.length - 1 ? "transparent" : "var(--border)")
-        })),
-        runs: detailDef.runs.map(r => ({
-          started:r[0], duration:r[1], result:r[2], records:r[3], cost:r[4],
-          hasError: !!r[5], error:r[5] || "", errorColor:RED,
-          dot: r[2] === "ok" ? GREEN : r[2] === "partial" ? AMBER : RED,
-          resultStyle: "padding:2px 9px;border-radius:var(--r-sm,9px);font-size:10.5px;"
-            + (r[2] === "ok" ? "background:var(--ok-soft);color:" + GREEN
-               : r[2] === "partial" ? "background:var(--warn-soft);color:" + AMBER
-               : "background:var(--bad-soft);color:" + RED)
-        }))
-      };
-    })() : {open:false, steps:[], runs:[], facts:[]};
-
-    const BUILDER_COPY = {
-      workflow: {title:"Create a workflow", hint:"PLAIN ENGLISH FIRST",
-        placeholder:"Every Friday, review all open deals. Flag anything inactive for 10 days and prepare a summary for management.",
-        examples:["Chase quotes nobody replied to","Warn me before a certificate lapses"], save:"Create workflow"},
-      schedule: {title:"Schedule a task", hint:"RECURRING WORK",
-        placeholder:"Every Thursday at 9am, check stock against this week's jobs and raise the order lines.",
-        examples:["Monthly VAT return reminder","Weekly van checks"], save:"Schedule it"},
-      teach: {title:"Teach an agent", hint:"A NEW ROUTINE FOR AN AGENT",
-        placeholder:"When an invoice goes past 60 days, tell me what changed about how that customer pays before you draft anything.",
-        examples:["Watch payment behaviour","Summarise the week for management"], save:"Teach it"}
-    }[st.opsBuilderMode] || {title:"Create a workflow", hint:"PLAIN ENGLISH FIRST", placeholder:"Describe what should happen.", examples:[], save:"Create"};
-
-    const builderModel = {
-      open: st.opsBuilderOpen, title:BUILDER_COPY.title, hint:BUILDER_COPY.hint,
-      placeholder:BUILDER_COPY.placeholder, saveLabel:BUILDER_COPY.save,
-      text: st.builderText, generated: st.builderGenerated,
-      generateLabel: st.builderGenerated ? "Rebuild from the description" : "Build it",
-      footer: st.builderGenerated ? "Steps with effects always wait for your yes" : "Describe the outcome. Pulse works out the steps",
-      examples: BUILDER_COPY.examples.map(e => ({label:e, use: () => this.setState({builderText:e, builderGenerated:false})})),
-      setText: (e) => this.setState({builderText:e.target.value}),
-      generate: () => this.setState({builderGenerated:true}),
-      close: () => this.setState({opsBuilderOpen:false}),
-      save: () => this.setState({opsBuilderOpen:false, opsFilter:"all"}),
-      blocks: [
-        ["TRIGGER", "Every Friday at 17:00", "From “every Friday” in your description", "var(--accent-line)", "var(--accent)"],
-        ["FIND", "All open deals with no activity for 10 days", "", "var(--border)", "var(--faint)"],
-        ["CONDITION", "Skip deals already marked won or lost", "", "var(--border)", "var(--faint)"],
-        ["ACTION", "Flag each one and write a management summary", "", "var(--border)", "var(--faint)"],
-        ["AGENT", "Sales Agent", "It already has the deal context", "var(--border)", "var(--faint)"],
-        ["APPROVAL", "None. Nothing leaves Pulse", "Add one if you want it emailed out", "var(--warn-soft)", AMBER],
-        ["ON FAILURE", "Retry twice, then tell Operations", "", "var(--border)", "var(--faint)"],
-        ["NOTIFY", "Post to Home and the management group", "", "var(--border)", "var(--faint)"]
-      ].map(b => ({label:b[0], value:b[1], note:b[2], border:b[3], labelColor:b[4], edit: () => {}}))
-    };
-
-    /* ---- records: contacts, files, ontology ---- */
-    const recSec = REC_SECTIONS.find(s => s.id === st.recSection) || REC_SECTIONS[0];
-    const askQ = st.recAsk.trim().toLowerCase();
-    const TAG_TINT = {staff:[LIME,""], customer:[BODY,""], supplier:[BODY,""],
-      watch:[AMBER,""], "on stop":[RED,""]};
-    const askTerms = askQ ? askQ.split(/\s+/).filter(w => w.length > 2 &&
-      ["the","and","for","who","any","anyone","all","are","with","from","that","show","find","list","get","people","contact","contacts"].indexOf(w) < 0) : [];
-    const matchedContacts = CONTACTS.filter(c => {
-      if (!askTerms.length) return true;
-      const hay = c.slice(0, 5).join(" ").toLowerCase();
-      return askTerms.some(t => hay.indexOf(t) > -1);
-    });
-
-    const treeOpen = st.treeOpen;
-    const expanded = st.treeExpanded;
-    const activeFile = FILE_TREE.find(r => r.id === st.treeFile) || FILE_TREE.find(r => r.type === "file");
-    const fileQ = st.treeQuery.trim().toLowerCase();
-    const fileHits = fileQ
-      ? FILE_TREE.filter(r => r.type === "file" && (r.name + " " + (r.body || []).join(" ")).toLowerCase().indexOf(fileQ) > -1).length
-      : 0;
-    const treeRows = FILE_TREE.filter(r => r.type === "folder" || expanded[r.parent] !== false).map(r => {
-      if (r.type === "folder"){
-        return {isFolder:true, isFile:false, name:r.name, pad:"9px",
-          count: String(FILE_TREE.filter(x => x.parent === r.id).length),
-          rot: expanded[r.id] === false ? "0deg" : "90deg",
-          toggle: () => this.setState(prev => ({treeExpanded: Object.assign({}, prev.treeExpanded,
-            {[r.id]: prev.treeExpanded[r.id] === false})}))};
-      }
-      const on = activeFile && r.id === activeFile.id;
-      const dim = fileQ && (r.name + " " + (r.body || []).join(" ")).toLowerCase().indexOf(fileQ) < 0;
-      return {isFolder:false, isFile:true, name:r.name, indexed:r.indexed,
-        fileStyle: "width:100%;display:flex;align-items:center;gap:8px;padding:7px 9px 7px 26px;border:0;border-radius:8px;"
-          + "cursor:pointer;font-size:12px;text-align:left;transition:background .18s var(--ease),color .18s var(--ease);"
-          + (on ? "background:var(--accent-faint);color:var(--ink)"
-                : dim ? "background:none;color:var(--faint)" : "background:none;color:var(--body)"),
-        pick: () => this.setState({treeFile:r.id})};
-    });
-
-    const ontoKind = {entity:["var(--accent)", INK], ledger:["var(--neutral)", BODY],
-      module:["#9fd6f0", INK], predicate:["transparent", DIM]};
-    const ontoSel = ONTO_NODES.find(n => n[0] === st.ontoNode) || ONTO_NODES[0];
-
-    const HERO = {
-      contacts:{eyebrow:"CONTACTS · " + CONTACTS.length + " ON FILE", title:"Everyone you deal with",
-        blurb:"Staff and external in one place. Ask in your own words. It matches on name, role, organisation and tag.",
-        placeholder:"Try “buyer”, “supplier”, “finance”…", kind:"KEYWORD", scroll:"SCROLL FOR THE FULL LIST",
-        suggestions:["buyer","supplier","staff","Meadow"]},
-      files:{eyebrow:"FILES · " + FILE_TREE.filter(r => r.type === "file").length + " DOCUMENTS",
-        title:"Everything on record", blurb:"Trade terms, supplier documents, size guides and invoices. Indexed pages are the ones the demo answers can cite.",
-        placeholder:"Search inside every document…", kind:"FULL TEXT", scroll:"SCROLL FOR THE VIEWER",
-        suggestions:["credit","expiry","framework","invoice"]},
-      ontology:{eyebrow:"ONTOLOGY", title:"Ontology", blurb:recSec.blurb,
-        placeholder:"", kind:"", scroll:"", suggestions:[]}
-    }[recSec.id];
-
-    const recModel = {
-      title: HERO.title, blurb: HERO.blurb,
-      eyebrow: HERO.eyebrow, askPlaceholder: HERO.placeholder,
-      searchKind: HERO.kind, scrollHint: HERO.scroll,
-      hasHero: page === "Records" && recSec.id !== "ontology",
-      isContacts: page === "Records" && recSec.id === "contacts",
-      isFiles: page === "Records" && recSec.id === "files",
-      isOntology: page === "Records" && recSec.id === "ontology",
-      openNew: () => this.setState({newRecOpen:true, newRecName:"", newRecTemplate:"Field sheet"}),
-      // On Files the hero field IS the in-file search, so there is only ever one
-      // search box on the page and it always drives what is shown below.
-      ask: recSec.id === "files" ? st.treeQuery : st.recAsk,
-      asking: recSec.id === "files" ? fileQ.length > 0 : askTerms.length > 0,
-      notAsking: recSec.id === "files" ? fileQ.length === 0 : askTerms.length === 0,
-      setAsk: (e) => this.setState(recSec.id === "files" ? {treeQuery:e.target.value} : {recAsk:e.target.value}),
-      clearAsk: () => this.setState(recSec.id === "files" ? {treeQuery:""} : {recAsk:""}),
-      askAnswer: recSec.id === "files"
-        ? (fileHits ? fileHits + " of " + FILE_TREE.filter(r => r.type === "file").length + " documents contain that" : "No document contains that")
-        : (matchedContacts.length
-          ? matchedContacts.length + " of " + CONTACTS.length + " match on name, role, organisation and tag"
-          : "Nothing matched. It searches name, role, organisation and tag only."),
-      askTerms,
-      askSuggestions: HERO.suggestions.map(s => ({label:s,
-        use: () => this.setState(recSec.id === "files" ? {treeQuery:s} : {recAsk:s})})),
-      contactCols: ["Name","Role","Email","Organisation","Tag"],
-      tableCaption: askTerms.length
-        ? "Filtered by " + askTerms.map(t => "“" + t + "”").join(" or ")
-        : "Staff, customers and suppliers as one set of records.",
-      tableBadge: matchedContacts.length + " / " + CONTACTS.length,
-      tableFooter: "Showing " + matchedContacts.length + " of " + CONTACTS.length + " contacts",
-      contactsEmpty: matchedContacts.length === 0,
-      contacts: matchedContacts.map(c => {
-        const tint = TAG_TINT[c[4]] || [BODY,""];
-        return {name:c[0], role:c[1], email:c[2], org:c[3], tag:c[4], bg:c[5],
-          initials: c[0].split(" ").map(w => w[0]).slice(0,2).join(""),
-          tagStyle: "padding:3px 11px;border-radius:var(--r-sm,9px);font-size:11px;background:var(--chip);border:1px solid var(--chip-border);color:" + tint[0],
-          open: () => this.setState({recSection:"files"})};
-      })
-    };
-
-    const treeModel = {
-      open: treeOpen, closed: !treeOpen, rows: treeRows,
-      toggle: () => this.setState(prev => ({treeOpen: !prev.treeOpen})),
-      query: st.treeQuery,
-      setQuery: (e) => this.setState({treeQuery:e.target.value}),
-      searching: fileQ.length > 0,
-      hits: fileQ ? fileHits + " MATCHING" : "",
-      meta: activeFile ? (activeFile.indexed ? "INDEXED" : "NOT INDEXED") : "",
-      path: activeFile ? activeFile.path : "",
-      fileTitle: activeFile ? activeFile.title : "",
-      facts: activeFile ? activeFile.facts.map(k => ({k:k[0], v:k[1]})) : [],
-      body: activeFile ? activeFile.body : [],
-      links: activeFile ? activeFile.links.map(l => ({label:l[0],
-        open: () => this.setState({recSection: l[1] === "person" || l[1] === "org" ? "contacts" : "ontology"})})) : []
-    };
 
     /* ---- admin ---- */
     const SEV = {high:RED, medium:AMBER, low:DIM};
@@ -2077,405 +677,14 @@ export default class PulseLogic extends DCLogic {
       } : {rows:[], issues:[]}
     };
 
-    /* ---- activity ---- */
-    /* Activity comes from the shared Jod-Z event log, so every simulated action shows up here. */
-    const OUTCOME_STATUS = {"Detected":"detected", "Draft prepared":"draft", "Awaiting approval":"awaiting",
-      "Approved in demo":"approved", "Simulated":"simulated", "Declined":"declined"};
-    const jodzEvents = jodzState().activity.map(a => ({id:a.id, stream: a.stream === "agents" ? "ai" : a.stream,
-      title:a.title, note:a.detail, actor:a.actor, rel: a.link ? linkLabelOf(a.link) : "Demo data",
-      src: a.actorKind === "agent" ? "Agent" : a.actorKind === "system" ? "Shopify (demo)" : "Pulse",
-      status: OUTCOME_STATUS[a.outcome] || "simulated", progress:100, at: Date.parse(a.at.replace(" ", "T")), fresh:false, link:a.link}));
-    const feeds = {data: jodzEvents.filter(e => e.stream === "data"), people: jodzEvents.filter(e => e.stream === "people"), ai: jodzEvents.filter(e => e.stream === "ai")};
-    const allEvents = STREAM_DEFS.flatMap(d => feeds[d.id] || []);
     const ago = (at) => {
       const s = Math.max(1, Math.round((Date.now() - at) / 1000));
       return s < 60 ? s + " seconds ago" : s < 3600 ? Math.round(s / 60) + " min ago" : Math.round(s / 3600) + " h ago";
     };
-    const STATUS_TINT2 = {completed:[GREEN,"var(--ok-soft)","completed"], working:[LIME,"var(--accent-faint)","working"],
-      failed:[RED,"var(--bad-soft)","failed"], awaiting:[AMBER,"var(--warn-soft)","awaiting approval"],
-      detected:[RED,"var(--bad-soft)","detected"], draft:[AMBER,"var(--warn-soft)","draft prepared"],
-      approved:[GREEN,"var(--ok-soft)","approved in demo"], simulated:[DIM,"var(--track)","simulated"], declined:[DIM,"var(--track)","declined"]};
-    const statusChip = (st2) => {
-      const t = STATUS_TINT2[st2] || STATUS_TINT2.completed;
-      return "flex:none;padding:1px 8px;border-radius:var(--chip-r,6px);font-size:9.5px;font-weight:500;white-space:nowrap;"
-        + "letter-spacing:.01em;background:" + t[1] + ";color:" + t[0];
-    };
-    const shortAgo = (at) => {
-      const d = new Date(at);
-      if (isNaN(d.getTime())) return "";
-      const iso = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
-      return iso === "2026-09-26" ? String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0")
-        : d.getDate() + " " + ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][d.getMonth()];
-    };
-    const needsYou = (e) => e.status === "failed" || e.status === "awaiting" || e.status === "detected" || e.status === "draft";
-    const kpiMatch = (e) => {
-      if (st.actKpi === "all") return true;
-      if (st.actKpi === "people") return e.stream === "people";
-      if (st.actKpi === "ai") return e.stream === "ai";
-      if (st.actKpi === "attention") return needsYou(e);
-      return true;
-    };
-    const logQ = st.actQuery.trim().toLowerCase();
-    const auditRows = allEvents.filter(kpiMatch)
-      .filter(e => !logQ || (e.title + " " + e.note + " " + e.actor + " " + e.rel + " " + e.src).toLowerCase().includes(logQ))
-      .sort((a, b) => b.at - a.at);
-    const openEvent = allEvents.find(e => e.id === st.actOpen);
-
-    /* The Agents lens is its own page, not the generic board with two empty
-       lanes: agent-specific numbers, a roster of what each agent is doing, and
-       the AI lane given the width beside it. */
-    const agentLens = st.actKpi === "ai";
-    const AGENT_STATE = {working:[LIME,"working"], complete:[GREEN,"idle"], waiting:[AMBER,"waiting on you"],
-      thinking:["#6ad0f0","thinking"], attention:[RED,"needs attention"]};
-    const solo = AGENT_DEFS.filter(a => !a.group);
-    const actionsFor = (i) => jodzEvents.filter(e => e.actor === (solo[i] || {}).name).length;
-    const agentRoster = solo.map((a, i) => {
-      const t = AGENT_STATE[a.state] || AGENT_STATE.complete;
-      const live = a.state === "working" || a.state === "thinking";
-      const acts = actionsFor(i);
-      return {name:a.name, shape:a.shape, tint:a.tint, state:a.state,
-        stateLabel:t[1], preview:a.preview, actions:String(acts),
-        dotStyle: "width:6px;height:6px;flex:none;border-radius:50%;background:" + t[0]
-          + (live ? ";box-shadow:0 0 8px " + t[0] + ";animation:breathe 1.6s ease-in-out infinite" : ""),
-        stateStyle: "font-family:" + MONO + ";font-size:9px;letter-spacing:0.12em;color:" + t[0],
-        barStyle: "height:2px;border-radius:2px;width:" + Math.round(100 * acts / 84) + "%;background:" + t[0],
-        style: "display:flex;flex-direction:column;gap:10px;width:100%;padding:14px 15px;text-align:left;cursor:pointer;"
-          + "background:var(--surface);border:1px solid var(--border);border-radius:var(--card-r,18px);backdrop-filter:blur(20px);"
-          + "transition:border-color .22s var(--ease),transform .2s var(--ease);animation:glide .5s var(--ease) " + (i * 60) + "ms both",
-        go: () => this.setState({page:"Agents", agentOpen:a.id})};
-    });
-    /* Needs attention is a triage queue, not a feed: one row per distinct
-       problem, deduped and oldest first, each answering what happened, why it
-       matters and what can be done. */
-    const attentionLens = st.actKpi === "attention";
-    const seenTri = {};
-    const attentionItems = allEvents
-      .filter(needsYou)
-      .filter(e => { const k = e.title + "|" + e.actor + "|" + e.rel; if (seenTri[k]) return false; seenTri[k] = 1; return true; })
-      .sort((a, b) => a.at - b.at);
-    const WHY = {
-      detected: ["Flagged from the demo data. A person decides what happens next.", "Open the record", "Open the record"],
-      awaiting: ["Prepared and parked. Nothing is sent, placed or paid until someone approves it in the demo.", "Review and decide", "Open the record"]
-    };
-    const triageGroups = [
-      ["detected", "DETECTED", "Found by an agent. Needs a decision.", RED, "var(--bad-soft)"],
-      ["awaiting", "DRAFTS AND APPROVALS", "Prepared, never sent.", AMBER, "var(--warn-soft)"]
-    ].map(g => {
-      const rows = attentionItems.filter(e => g[0] === "detected" ? e.status === "detected" || e.status === "failed" : e.status === "awaiting" || e.status === "draft");
-      return {key:g[0], label:g[1], blurb:g[2], count:String(rows.length), any: rows.length > 0,
-        labelStyle: "font-family:" + MONO + ";font-size:9.5px;letter-spacing:0.14em;color:" + g[3],
-        rows: rows.map((e, i) => ({
-          title:e.title, note:e.note, actor:e.actor, rel:e.rel,
-          why: WHY[g[0]][0], primary: WHY[g[0]][1], secondary: WHY[g[0]][2],
-          waited: "since " + shortAgo(e.at),
-          railStyle: "position:absolute;left:0;top:0;bottom:0;width:2px;background:" + g[3],
-          chip: g[0] === "detected" ? "detected" : (STATUS_TINT2[e.status] || STATUS_TINT2.awaiting)[2],
-          chipStyle: "flex:none;padding:2px 9px;border-radius:var(--chip-r,6px);font-size:9.5px;font-weight:500;background:" + g[4] + ";color:" + g[3],
-          primaryStyle: "flex:none;height:30px;padding:0 14px;border:0;border-radius:var(--cta-r,10px);background:var(--accent-fill,var(--accent));color:var(--on-accent);box-shadow:var(--accent-glow,none);"
-            + "font-size:12.5px;font-weight:500;cursor:pointer;transition:transform .18s var(--ease)",
-          style: "position:relative;display:flex;flex-direction:column;gap:9px;padding:15px 17px 15px 19px;background:var(--surface);"
-            + "border:1px solid var(--border);border-radius:var(--card-r,18px);backdrop-filter:blur(20px);overflow:hidden;"
-            + "transition:border-color .22s var(--ease);animation:glide .5s var(--ease) " + (i * 55) + "ms both",
-          open: () => e.link ? jodzOpenRecord(e.link) : this.setState({actOpen:e.id})
-        }))};
-    });
-    /* The People lens answers who is doing what right now — a roster of the
-       staff with access, what each last touched, and what is parked on them. */
-    const peopleLens = st.actKpi === "people";
-    const peopleEvents = (feeds.people || []);
-    const staff = PEOPLE.slice(0, 6);
-    const P_STATE = [[LIME,"active now"],[LIME,"active now"],["#6ad0f0","in a record"],[GREEN,"idle"],[AMBER,"away"],[GREEN,"idle"]];
-    const actsFor = (i) => jodzEvents.filter(e => e.actor === (staff[i] || [])[0]).length;
-    const peopleRoster = staff.map((p, i) => {
-      const t = P_STATE[i % P_STATE.length];
-      const live = t[1] === "active now" || t[1] === "in a record";
-      const acts = actsFor(i);
-      const last = peopleEvents[i % Math.max(1, peopleEvents.length)];
-      const waiting = i === 2 || i === 4;
-      return {name:p[0], role:p[1], org:p[3],
-        initials: p[0].split(" ").map(w => w[0]).slice(0, 2).join("").toUpperCase(),
-        stateLabel:t[1], actions:String(acts),
-        preview: last ? last.title : "Nothing today",
-        avatarStyle: "width:34px;height:34px;flex:none;border-radius:var(--r-md,12px);background:var(--surface-2);border:1px solid var(--border);"
-          + "color:var(--body);display:flex;align-items:center;justify-content:center;font-size:11.5px;font-weight:500",
-        dotStyle: "width:6px;height:6px;flex:none;border-radius:50%;background:" + t[0]
-          + (live ? ";box-shadow:0 0 8px " + t[0] + ";animation:breathe 1.6s ease-in-out infinite" : ""),
-        stateStyle: "font-family:" + MONO + ";font-size:9px;letter-spacing:0.12em;color:" + t[0],
-        barStyle: "height:2px;border-radius:2px;width:" + Math.round(100 * acts / Math.max(1, ...staff.map((_, k) => actsFor(k)))) + "%;background:" + t[0],
-        waiting, waitLabel: waiting ? "1 waiting on them" : "",
-        style: "display:flex;flex-direction:column;gap:10px;width:100%;padding:14px 15px;text-align:left;cursor:pointer;"
-          + "background:var(--surface);border:1px solid var(--border);border-radius:var(--card-r,18px);backdrop-filter:blur(20px);"
-          + "transition:border-color .22s var(--ease),transform .2s var(--ease);animation:glide .5s var(--ease) " + (i * 60) + "ms both",
-        go: () => this.setState({page:"People"})};
-    });
-    const actModel = {
-      agentLens, attentionLens, peopleLens,
-      genericLens: !agentLens && !attentionLens && !peopleLens,
-      showLanes: !attentionLens,
-      eyebrow: agentLens ? "AGENT ACTIVITY" : attentionLens ? "TRIAGE" : peopleLens ? "PEOPLE ACTIVITY" : "ACTIVITY",
-      heading: agentLens ? "What the agents did" : attentionLens ? "What needs you" : peopleLens ? "Who did what" : "Everything happening now",
-      subhead: agentLens
-        ? solo.length + " agents are registered. Every action below went through a tool they were granted, and anything that changes data is still waiting on you."
-        : attentionLens
-          ? "Everything that stopped working or is parked waiting on a decision, oldest first. Nothing here has been lost."
-          : peopleLens
-            ? "Four demo profiles. Every edit, approval and decision below is written against the person who made it, and every one is simulated."
-            : "Simulated events from the demo data: data arriving, people acting and agents working, then the audit trail underneath.",
-      peopleKpis: [
-        ["People with activity", new Set(feeds.people.map(e => e.actor)).size + " of 4", "demo profiles", LIME],
-        ["Decisions made", String(jodzState().approvals.filter(a => a.status !== "Awaiting approval").length), "approved or declined in demo", GREEN],
-        ["Waiting on someone", String(jodzState().approvals.filter(a => a.status === "Awaiting approval").length), "approvals parked", AMBER],
-        ["Stock movements", String(jodzState().movements.length), "receipts, dispatches, returns", "#6ad0f0"]
-      ].map((k, ki) => ({label:k[0], value:k[1], hint:k[2], dot:k[3],
-        valueColor: k[3] === RED || k[3] === AMBER ? k[3] : INK,
-        style: "padding:15px 17px 17px;border-radius:var(--card-r,18px);text-align:left;background:var(--surface);border:1px solid var(--border);"
-          + "backdrop-filter:blur(20px);animation:springIn .5s var(--ease) " + (ki * 70) + "ms both"})),
-      peopleRoster,
-      triage: triageGroups,
-      triageEmpty: attentionItems.length === 0,
-      attentionKpis: [
-        ["Detected", String(attentionItems.filter(e => e.status === "detected").length), "flagged by agents", RED],
-        ["Drafts and approvals", String(attentionItems.filter(e => e.status === "awaiting" || e.status === "draft").length), "prepared, never sent", AMBER],
-        ["Oldest wait", attentionItems.length ? shortAgo(attentionItems[0].at) : "None", "since it was raised", "#6ad0f0"],
-        ["Simulated outcomes", String(allEvents.filter(e => e.status === "simulated" || e.status === "approved").length), "recorded in the demo", LIME]
-      ].map((k, ki) => ({label:k[0], value:k[1], hint:k[2], dot:k[3],
-        valueColor: k[3] === RED || k[3] === AMBER ? k[3] : INK,
-        style: "padding:15px 17px 17px;border-radius:var(--card-r,18px);text-align:left;background:var(--surface);border:1px solid var(--border);"
-          + "backdrop-filter:blur(20px);animation:springIn .5s var(--ease) " + (ki * 70) + "ms both"})),
-      agentKpis: [
-        ["Agent events", String(feeds.ai.length), "in the demo log", LIME],
-        ["Working now", String(solo.filter(a => a.state === "working" || a.state === "thinking").length) + " of " + solo.length, "the rest are idle", "#6ad0f0"],
-        ["Waiting on your yes", String(solo.filter(a => a.state === "waiting").length), "drafted, never sent", AMBER],
-        ["Needs attention", String(solo.filter(a => a.state === "attention").length), "failed or blocked", RED]
-      ].map((k, ki) => ({label:k[0], value:k[1], hint:k[2], dot:k[3],
-        valueColor: k[3] === RED || k[3] === AMBER ? k[3] : INK,
-        style: "padding:15px 17px 17px;border-radius:var(--card-r,18px);text-align:left;background:var(--surface);border:1px solid var(--border);"
-          + "backdrop-filter:blur(20px);animation:springIn .5s var(--ease) " + (ki * 70) + "ms both"})),
-      roster: agentRoster,
-      laneCols: (agentLens || peopleLens) ? "minmax(0,1fr)" : "repeat(3,minmax(0,1fr))",
-      togglePause: () => this.setState(p => ({actPaused: !p.actPaused})),
-      pauseLabel: st.actPaused ? "Resume live view" : "Pause live view",
-      pauseIcon: st.actPaused ? "M7 4.5v15l13-7.5-13-7.5Z" : "M9 5.5v13 M15 5.5v13",
-      pauseStyle: "height:36px;display:flex;align-items:center;gap:8px;padding:0 15px;border-radius:var(--r-ctl,9px);cursor:pointer;font-size:13px;font-weight:500;"
-        + "transition:background .2s var(--ease),border-color .2s var(--ease);"
-        + (st.actPaused ? "background:var(--accent);border:1px solid var(--accent);color:var(--on-accent)"
-                        : "background:var(--chip);border:1px solid var(--chip-border);color:var(--body)"),
-      kpis: [
-        ["Events", String(allEvents.length), "all", "simulated, from the demo log", LIME],
-        ["People", String(feeds.people.length), "people", "actions by 4 demo profiles", "#f0c04b"],
-        ["Agent events", String(feeds.ai.length), "ai", "by " + solo.length + " agents", "#6ad0f0"],
-        ["Need attention", String(attentionItems.length), "attention", "detected, drafted or awaiting", RED]
-      ].map((k, ki) => {
-        const on = st.actKpi === k[2];
-        return {label:k[0], value:k[1], hint:k[3], dot:k[4],
-          labelColor: on ? "var(--on-accent-2)" : "var(--dim)",
-          valueColor: on ? "var(--on-accent)" : (k[2] === "attention" ? RED : INK),
-          hintColor: on ? "var(--on-accent-2)" : "var(--faint)",
-          style: "padding:16px 18px 18px;border-radius:var(--card-r,18px);cursor:pointer;text-align:left;"
-            + "transition:background .2s var(--ease),border-color .2s var(--ease),transform .18s var(--ease);"
-            + (on ? "background:var(--accent);border:1px solid var(--accent)"
-                  : "background:var(--surface);border:1px solid var(--border);backdrop-filter:blur(20px)"),
-          pick: () => this.setState({actKpi: on ? "all" : k[2]})};
-      }).map((k, ki) => Object.assign(k, {style: k.style + ";animation:springIn .5s var(--ease) " + (ki * 70) + "ms both"})),
-      streams: (agentLens ? STREAM_DEFS.filter(d => d.id === "ai")
-        : peopleLens ? STREAM_DEFS.filter(d => d.id === "people") : STREAM_DEFS).map((d, di) => {
-        const items = (feeds[d.id] || []).filter(kpiMatch);
-        const hovered = st.actHover === d.id;
-        return {title:d.title, sub:d.sub, icon:d.icon, tint:d.tint, delay: (di * 110) + "ms",
-          state: st.actPaused ? "PAUSED" : hovered ? "HELD" : "DEMO LOG",
-          stateColor: st.actPaused || hovered ? "var(--faint)" : d.tint,
-          empty: items.length === 0,
-          enter: () => this.setState({actHover:d.id}),
-          leave: () => this.setState(p => (p.actHover === d.id ? {actHover:null} : null)),
-          items: items.map((e, i) => {
-            const t = STATUS_TINT2[e.status] || STATUS_TINT2.completed;
-            return {title:e.title, note:e.note, status:t[2], statusColor:t[0],
-              statusStyle: statusChip(e.status),
-              // Only unfinished work earns a chip; everything else says it with the rail.
-              showChip: e.status !== "completed",
-              rail: e.status === "completed" ? "var(--track)" : t[0],
-              actor: e.actor, rel: e.rel, short: shortAgo(e.at),
-              srcAbbr: SRC_ABBR[e.src] || "PL", srcTint: SRC_TINT[e.src] || LIME,
-              isWorking: e.status === "working", progress: Math.round(e.progress) + "%",
-              style: "position:relative;padding:9px 11px 10px 13px;border-radius:var(--r-sm,10px);cursor:pointer;margin-bottom:3px;"
-                + "background:" + (i === 0 && e.fresh ? "var(--surface-2)" : "transparent") + ";"
-                + "transition:background .2s var(--ease);"
-                + (e.fresh && i === 0
-                  ? (e.status === "failed" ? "animation:cardIn .34s var(--ease) both,failFlash .9s var(--ease) 1"
-                                           : "animation:cardIn .34s var(--ease) both,glowIn 1.4s var(--ease) 1")
-                  : ""),
-              open: () => this.setState({actOpen:e.id})};
-          })};
-      }),
-      query: st.actQuery,
-      setQuery: (e) => this.setState({actQuery:e.target.value}),
-      auditCols: ["Time","Event","Person or agent","Related record","Source","Status"],
-      auditCaption: logQ ? "Filtered by “" + st.actQuery.trim() + "”"
-        : st.actKpi === "all" ? "Every event, with who or what caused it."
-        : "Filtered by the metric above.",
-      auditBadge: auditRows.length + " shown",
-      auditFooter: "Showing " + auditRows.length + " of " + allEvents.length + " events in this session",
-      auditFilters: ["Last 24 hours","Anyone","Any system","Any type","Any status"].map(l => ({label:l,
-        style: "height:34px;display:flex;align-items:center;gap:7px;padding:0 13px;background:var(--chip);border:1px solid var(--chip-border);"
-          + "border-radius:var(--r-sm,9px);font-size:12.5px;color:var(--dim);cursor:pointer;white-space:nowrap;transition:border-color .2s var(--ease),color .2s var(--ease)",
-        pick: () => {}})),
-      audit: auditRows.slice(0, 12).map(e => ({
-        when: new Date(e.at).toLocaleTimeString("en-IE", {hour:"2-digit", minute:"2-digit", second:"2-digit"}),
-        title:e.title, actor:e.actor, rel:e.rel, src:e.src,
-        status: (STATUS_TINT2[e.status] || STATUS_TINT2.completed)[2],
-        statusStyle: statusChip(e.status),
-        open: () => this.setState({actOpen:e.id})
-      })),
-      detailOpen: !!openEvent,
-      closeDetail: () => this.setState({actOpen:null}),
-      detail: openEvent ? (() => {
-        const t = STATUS_TINT2[openEvent.status] || STATUS_TINT2.completed;
-        const streamName = {data:"NEW DATA", people:"EMPLOYEE ACTIVITY", ai:"AI ACTIVITY"}[openEvent.stream];
-        return {eyebrow: streamName + " · " + openEvent.src.toUpperCase(),
-          title:openEvent.title, note:openEvent.note, status:t[2],
-          statusStyle: statusChip(openEvent.status),
-          why: openEvent.stream === "ai"
-            ? "An agent routine matched this record, so the agent acted within the permissions it was granted."
-            : openEvent.stream === "data"
-              ? "The source system pushed this in, and the record spine matched it to an existing account."
-              : "A person with the permission to do it made this decision, and it was written as them.",
-          facts: [{k:"RESPONSIBLE", v:openEvent.actor}, {k:"SOURCE SYSTEM", v:openEvent.src},
-            {k:"RELATED RECORD", v:openEvent.rel}, {k:"STATUS", v:t[2]},
-            {k:"WHEN", v: new Date(openEvent.at).toLocaleTimeString("en-IE")},
-            {k:"EVENT ID", v: openEvent.id.toUpperCase()}],
-          hasDiff: openEvent.stream === "people" || openEvent.stream === "data",
-          diff: [{field:"Status", before:"Pending", after:"Updated in demo"},
-            {field:"Source", before:"None", after:openEvent.src},
-            {field:"Record", before:openEvent.rel, after:openEvent.rel}],
-          related: [openEvent.rel, openEvent.actor, openEvent.src],
-          audit: "Written to the event log · immutable · " + openEvent.id.toUpperCase(),
-          canUndo: openEvent.stream === "people" && openEvent.status === "completed"};
-      })() : {facts:[], diff:[], related:[]}
-    };
 
     const g = this.graph, live = this.searches || [];
-    const PHASE_WORD = {sweep:"expanding", path:"tracing", hold:"matched", fade:"clearing"};
-    const graphModel = {
-      nodeCount: g ? g.nodes.length.toLocaleString("en-IE") : "-",
-      edgeCount: g ? g.edges.length.toLocaleString("en-IE") : "-",
-      running: live.filter(s => s.delay <= 0).length + " OF " + live.length,
-      queries: live.map((s, i) => {
-        const settled = Math.min(s.order.length, Math.floor(s.reveal));
-        const pct = s.phase === "sweep"
-          ? Math.round(100 * settled / Math.max(1, s.order.length))
-          : 100;
-        return {hue: s.hue,
-          label: "Query " + (i + 1) + " · " + (g ? CLUSTERS[g.nodes[s.source].cluster][0] : ""),
-          detail: s.delay > 0 ? "queued"
-            : s.phase === "sweep" ? settled + " settled"
-            : PHASE_WORD[s.phase] + " · " + Math.max(0, s.path.length - 1) + " hops",
-          progress: (s.delay > 0 ? 0 : pct) + "%"};
-      }),
-      run: () => { if ((st.ontoQuery || "").trim()) this.runOntoQuery(); else this.planSearch(); try { this.setState({gTick: Math.random()}); } catch (e) {} },
-      legend: CLUSTERS.map((c, i) => ({label:c[0], bg:c[1],
-        count: g ? String((this._legendCounts || (this._legendCounts = (() => {
-          const c = new Array(CLUSTERS.length).fill(0);
-          for (const nd of g.nodes) if (nd.kind !== "core" && nd.cluster >= 0) c[nd.cluster]++;
-          return c; })()))[i]) : "-"}))
-    };
 
     const oq = st.ontoQuery || "", ontoSearchRes = st.ontoResult;
-    const ontoSearch = {
-      query: oq, hasQuery: oq.length > 0,
-      setQuery: (e) => this.setState({ontoQuery:e.target.value}),
-      onKey: (e) => { if (e.key === "Enter") this.runOntoQuery(); },
-      clear: () => this.clearOntoQuery(),
-      hasResult: !!ontoSearchRes, resultEmpty: !!(ontoSearchRes && ontoSearchRes.empty),
-      resultFound: !!(ontoSearchRes && !ontoSearchRes.empty && ontoSearchRes.mode === "path" && ontoSearchRes.found),
-      resultNoPath: !!(ontoSearchRes && !ontoSearchRes.empty && ontoSearchRes.mode === "path" && !ontoSearchRes.found),
-      resultFan: !!(ontoSearchRes && !ontoSearchRes.empty && ontoSearchRes.mode === "fan"),
-      fromLabel: ontoSearchRes ? ontoSearchRes.from : "", toLabel: ontoSearchRes ? ontoSearchRes.to : "",
-      hopsLabel: ontoSearchRes && ontoSearchRes.hops != null ? ontoSearchRes.hops + " hop" + (ontoSearchRes.hops === 1 ? "" : "s") + " between records" : "",
-      connectedLabel: ontoSearchRes && ontoSearchRes.connected
-        ? (ontoSearchRes.connected.length ? "Also connected to " + ontoSearchRes.connected.join(", ") : "No other clusters reached this time. Try again")
-        : ""
-    };
-
-    const ontoModel = {
-      edges: ONTO_EDGES.map(e => {
-        const near = ontoSel && (Math.abs(e[0] - ontoSel[2]) < 2 && Math.abs(e[1] - ontoSel[3]) < 2)
-          || (Math.abs(e[2] - ontoSel[2]) < 2 && Math.abs(e[3] - ontoSel[3]) < 2);
-        return {x1:e[0], y1:e[1], x2:e[2], y2:e[3],
-          stroke: near ? "var(--accent-line)" : "var(--border)", width: near ? 1.6 : 1};
-      }),
-      // Predicates are edge labels, so they render inside the viewBox and scale
-      // with the geometry instead of competing with the fixed-width node pills.
-      labels: ONTO_NODES.filter(n => n[1] === "predicate").map(n => {
-        const w = Math.round(n[0].length * 12.2 + 34);
-        return {label:n[0], rx:n[2] - w / 2, ry:n[3] - 18, rw:w,
-          stroke: st.ontoNode === n[0] ? "var(--accent-line)" : "var(--border)"};
-      }),
-      nodes: ONTO_NODES.filter(n => n[1] !== "predicate").map(n => {
-        const [label, kind, x, y, big] = n;
-        const tint = ontoKind[kind];
-        const on = st.ontoNode === label, hot = st.ontoHover === label;
-        const isPred = kind === "predicate";
-        return {label, fontSize: isPred ? "10.5px" : big ? "13.5px" : "12.5px",
-          ink: isPred ? DIM : tint[1],
-          dotStyle: isPred ? "display:none"
-            : "width:" + (big ? "10px" : "8px") + ";height:" + (big ? "10px" : "8px") + ";border-radius:var(--r-sm,9px);background:" + tint[0],
-          style: "position:absolute;left:" + (7 + x * 0.086) + "%;top:" + (8 + y * 0.142) + "%;transform:translate(-50%,-50%)"
-            + (hot || on ? " scale(1.06)" : "") + ";display:flex;align-items:center;gap:8px;cursor:pointer;"
-            + "padding:" + (isPred ? "3px 9px" : "8px 14px") + ";border-radius:var(--r-sm,9px);white-space:nowrap;"
-            + "transition:transform .24s var(--ease),border-color .2s var(--ease),background .2s var(--ease);"
-            + (isPred
-              ? "background:var(--surface-2);border:1px dashed " + (on ? "var(--accent-line)" : "var(--border)")
-              : on ? "background:var(--surface-2);border:1px solid var(--accent);box-shadow:0 6px 20px var(--accent-faint)"
-                   : "background:var(--overlay);border:1px solid var(--border);backdrop-filter:blur(20px)"),
-          pick: () => this.setState({ontoNode:label}),
-          enter: () => this.setState({ontoHover:label}),
-          leave: () => this.setState(prev => (prev.ontoHover === label ? {ontoHover:null} : null))};
-      }),
-      selectedLabel: ontoSel[0],
-      selectedNote: ontoSel[5],
-      legend: [["Core entity","var(--accent)", ONTO_NODES.filter(n => n[1] === "entity").length],
-        ["Read through the spine","var(--neutral)", ONTO_NODES.filter(n => n[1] === "ledger").length],
-        ["Module entity","#9fd6f0", ONTO_NODES.filter(n => n[1] === "module").length],
-        ["Predicate","var(--track)", ONTO_NODES.filter(n => n[1] === "predicate").length]]
-        .map(l => ({label:l[0], bg:l[1], count:String(l[2])})),
-      layouts: [],
-      ...ontoSearch
-    };
-
-    const newRecModel = {
-      open: st.newRecOpen, name: st.newRecName,
-      footer: st.newRecName.trim() ? "Saves into " + recSec.label.toLowerCase() : "Every record gets an id, an owner and an audit trail",
-      setName: (e) => this.setState({newRecName:e.target.value}),
-      close: () => this.setState({newRecOpen:false}),
-      save: () => this.setState({newRecOpen:false}),
-      cats: REC_TEMPLATE_CATS.map(c => {
-        const on = (st.newRecCat || "All") === c;
-        return {label:c,
-          style: "height:28px;padding:0 13px;border:0;border-radius:var(--r-seg,7px);cursor:pointer;font-size:12px;white-space:nowrap;"
-            + "transition:background .16s var(--ease),color .16s var(--ease);"
-            + (on ? "background:var(--pill-bg);color:var(--pill-ink);font-weight:600;box-shadow:0 2px 5px rgba(0,0,0,.34),0 6px 16px rgba(0,0,0,.22),inset 0 1px 0 rgba(255,255,255,.5);" : "background:none;color:" + DIM),
-          pick: () => this.setState({newRecCat:c})};
-      }),
-      templates: REC_TEMPLATES.filter(t => (st.newRecCat || "All") === "All" || t[1] === st.newRecCat).map(t => {
-        const on = st.newRecTemplate === t[0];
-        const ink = on ? "var(--accent)" : "var(--dim)";
-        return {label:t[0], note:t[2], icon:t[3], kind:t[4], picked:on,
-          iconColor: ink,
-          thumbStyle: "position:relative;height:80px;border-radius:var(--r-md,14px);display:flex;align-items:center;justify-content:center;padding:10px;"
-            + "transition:background .16s var(--ease);"
-            + (on ? "background:var(--accent-faint)" : "background:var(--chip)"),
-          isGrid: t[4] === "grid", isCard: t[4] === "card", isRows: t[4] === "rows", isTimeline: t[4] === "timeline",
-          isKanban: t[4] === "kanban", isChecklist: t[4] === "checklist", isLedger: t[4] === "ledger",
-          isInvoice: t[4] === "invoice", isDocument: t[4] === "document", isGallery: t[4] === "gallery",
-          isMap: t[4] === "map", isSchedule: t[4] === "schedule",
-          rows3: [1,2,3].map(() => ({})),
-          style: "padding:10px;border-radius:var(--card-r,18px);cursor:pointer;text-align:left;display:flex;flex-direction:column;"
-            + "transition:border-color .16s var(--ease),background .16s var(--ease),transform .16s var(--ease);"
-            + (on ? "background:var(--chip);border:1.5px solid var(--accent)"
-                  : "background:var(--records-card);border:1px solid var(--chip-border)"),
-          pick: () => this.setState({newRecTemplate:t[0]})};
-      })
-    };
 
     const areaDef = ASPECT_DEFS.find(x => x.id === st.aspect);
     const areaLabel = areaDef ? areaDef.label : st.aspect;
@@ -2485,12 +694,6 @@ export default class PulseLogic extends DCLogic {
             : "background:var(--surface);border:1px solid var(--border);color:var(--dim)");
     const aq = st.agentQuery.trim().toLowerCase();
     const agentMatches = st.agents.filter(a => !aq || (a.name + " " + a.role + " " + a.preview).toLowerCase().indexOf(aq) > -1);
-    const activeAgent = st.agents.find(a => a.id === st.agentId) || st.agents[0];
-    const agentHistory = jodzState().activity.filter(e => e.actor === activeAgent.name).slice(0, 6);
-    const activeThread = activeAgent.thread
-      .concat(agentHistory.length ? [{kind:"stamp", text:"Activity history"}, {kind:"agent", text:"what i have done, and where it stands:",
-        lines: agentHistory.map(e => ({k:e.outcome, v:e.title + " · " + e.at.slice(5)}))}] : [])
-      .concat(st.agentExtra[activeAgent.id] || []);
 
     const segStyle = (active) => "display:flex;align-items:center;gap:7px;height:30px;padding:0 14px;border:0;border-radius:var(--r-seg,7px);cursor:pointer;font-size:12.5px;white-space:nowrap;"
       + "transition:background .24s var(--ease),color .24s var(--ease),font-weight .24s var(--ease);"
@@ -2563,23 +766,6 @@ export default class PulseLogic extends DCLogic {
     const bucketOf = (a) => a._ap.status === "Awaiting approval" ? "Awaiting you" : "Decided";
     const APPROVAL_COUNTS = {"Awaiting you":0, "Awaiting others":0, "Decided":0};
     APPROVALS.forEach(a => { APPROVAL_COUNTS[bucketOf(a)] += 1; });
-    const approvalView = st.workViews.approvals || "Awaiting you";
-    const pendingApprovals = APPROVAL_COUNTS["Awaiting you"];
-    const approvalRows = APPROVALS.filter(a => bucketOf(a) === approvalView).map(a => Object.assign({}, a, {
-      statusStyle: "padding:3px 10px;border-radius:var(--r-sm,9px);font-size:11px;"
-        + (a.status !== "awaiting you" ? "background:var(--ok-soft);color:" + GREEN : "background:var(--warn-soft);color:" + AMBER),
-      pending: a.status === "awaiting you",
-      viewLabel: "Open " + linkLabelOf(a._ap.link),
-      openWork: () => jodzOpenDrawer("approval", a.id),
-      approve: () => jodzDecide(a.id, true),
-      decline: () => jodzDecide(a.id, false)
-    }));
-    const WORK_COUNTS = {
-      tasks: openWork.length,
-      approvals: APPROVALS.filter(a => bucketOf(a) === "Awaiting you").length,
-      workflows: OPS_DEFS.filter(w => w.kind !== "task" && (st.opsOff[w.id] === undefined ? w.on : !st.opsOff[w.id])).length,
-      schedules: OPS_DEFS.filter(w => w.triggerKind === "schedule").length
-    };
     const approvals = APPROVALS.filter(a => bucketOf(a) === st.approvalFilter).map(a => Object.assign({}, a, {
       pending: a.status === "awaiting you",
       statusBg: a.status !== "awaiting you" ? "var(--ok-soft)" : "var(--warn-soft)",
@@ -2589,102 +775,6 @@ export default class PulseLogic extends DCLogic {
       approve: () => jodzDecide(a.id, true)
     }));
 
-    /* An approval is a decision about a piece of work, so the work itself has
-       to be readable before the yes. The payload shape differs per request —
-       a document, a table, a field-level change — and the viewer renders
-       whichever one the approval carries, alongside the reasoning and the
-       tools that will fire. */
-    const wDoc = APPROVALS.find(a => a.id === st.workDoc);
-    const effectTint = (fx) => fx === "read" ? FAINT : fx === "write" ? AMBER : RED;
-    const workViewer = !wDoc ? {open:false} : (() => {
-      const w = wDoc.work, tab = st.workDocTab || "work";
-      const tabDef = [["work","The work"],["thinking","Thinking"],["trail","Trail"]];
-      const lastTotal = (w.totals || [])[(w.totals || []).length - 1];
-      const changed = (w.diff || []).filter(d => d[1] !== d[2]);
-      /* The summary strip answers the question the kind of work actually
-         raises: a purchase order is about lines and money, a limit change is
-         about before and after, a document is about scope. */
-      let facts = [];
-      let kindIcon = "M6 3.5h9l3.5 3.5v13.5H6Z M15 3.5V7h3.5";
-      if (w.kind === "table"){
-        facts = [["Lines", String((w.rows || []).length)],
-                 ["Value", lastTotal ? lastTotal[1] : "-"],
-                 ["Terms", (w.sub || "").split(" · ").slice(-1)[0] || "-"]];
-        kindIcon = "M4 6.5h16 M4 12h16 M4 17.5h16 M9 4v16";
-      } else if (w.kind === "diff"){
-        facts = [["Fields changing", String(changed.length)]]
-          .concat(changed.slice(0, 2).map(d => [d[0], d[1] + " → " + d[2]]));
-        kindIcon = "M4 8h9l-2.5-2.5 M20 16h-9l2.5 2.5";
-      } else if (w.kind === "doc"){
-        facts = [["Sections", String((w.doc || []).length)],
-                 ["Value", lastTotal ? lastTotal[1] : (wDoc.title.match(/€[\d,\.]+/) || ["-"])[0]],
-                 ["Prepared by", (wDoc.subject || "").indexOf("Helios") > -1 ? "Agent draft" : "Team"]];
-        kindIcon = "M6 3.5h9l3.5 3.5v13.5H6Z M15 3.5V7h3.5 M9 12h6 M9 16h4";
-      }
-      const effects = (w.tools || []).filter(t => t[1] !== "read");
-      return {
-        open:true, id:wDoc.id, title:wDoc.title, subject:wDoc.subject, label:w.label,
-        headline:w.headline,
-        kindIcon,
-        facts: facts.map(f => ({label:f[0], value:f[1]})),
-        hasFacts: facts.length > 0,
-        effectCount: effects.length ? String(effects.length) + " effect" + (effects.length === 1 ? "" : "s") + " on approval" : "No effects",
-        effectStyle: "display:flex;align-items:center;gap:7px;height:26px;padding:0 11px;border-radius:var(--r-sm,9px);font-size:11px;"
-          + (effects.length ? "background:var(--warn-soft);color:" + AMBER : "background:var(--ok-soft);color:" + GREEN),
-        /* Decided approvals describe what happened, not what will. */
-        sub: (wDoc.status === "approved" || st.approved[wDoc.id])
-          ? w.sub.replace(" change on approval", " changed on approval").replace("On approval", "Applied")
-          : w.sub,
-        risk:w.risk, age:wDoc.age,
-        pending: wDoc.status !== "approved" && !st.approved[wDoc.id],
-        decided: wDoc.status === "approved" || st.approved[wDoc.id] === true,
-        close: () => this.setState({workDoc:null}),
-        approve: () => this.setState(prev => ({approved: Object.assign({}, prev.approved, {[wDoc.id]:true}), workDoc:null})),
-        tabs: tabDef.map(t => ({
-          label:t[1],
-          style: "height:28px;padding:0 13px;border:0;border-radius:var(--r-ctl,9px);font-size:12.5px;cursor:pointer;transition:background .2s var(--ease),color .2s var(--ease);"
-            + (tab === t[0] ? "background:var(--accent-fill,var(--accent));color:var(--on-accent);box-shadow:var(--accent-glow,none)" : "background:none;color:var(--dim)"),
-          pick: () => this.setState({workDocTab:t[0]})
-        })),
-        onWork: tab === "work", onThinking: tab === "thinking", onTrail: tab === "trail",
-        isDoc: w.kind === "doc", isTable: w.kind === "table", isDiff: w.kind === "diff",
-        doc: (w.doc || []).map(d => ({heading:d[0], body:d[1]})),
-        cols: (w.cols || []).map((c, i) => ({label:c,
-          style: "padding:9px 12px;font-family:" + MONO + ";font-size:9px;letter-spacing:0.12em;color:var(--faint);text-align:" + (w.align[i] || "left")})),
-        rows: (w.rows || []).map((r, ri) => ({
-          cells: r.map((v, i) => ({v,
-            style: "padding:11px 12px;font-size:12.5px;color:" + (i === 0 ? "var(--ink)" : "var(--body)")
-              + ";text-align:" + (w.align[i] || "left")
-              + (i > 1 ? ";font-family:" + MONO : "")})),
-          style: "border-top:1px solid var(--border)" + (ri % 2 ? ";background:var(--surface-faint)" : "")
-        })),
-        hasTotals: (w.totals || []).length > 0,
-        footer: wDoc.status === "approved" || st.approved[wDoc.id]
-          ? "Decided. The trail is written against your name."
-          : "Nothing has run yet. Approving fires " + (w.tools.filter(t => t[1] !== "read").map(t => t[0]).join(" and ") || "no effects") + ".",
-        totals: (w.totals || []).map((t, i, arr) => ({label:t[0], value:t[1],
-          style: "display:flex;align-items:baseline;gap:10px;padding:8px 2px"
-            + (i === arr.length - 1 ? ";margin-top:4px;padding-top:11px;border-top:1px solid var(--border)" : ""),
-          labelStyle: "flex:1;font-size:12.5px;color:" + (i === arr.length - 1 ? "var(--ink)" : "var(--dim)"),
-          valueStyle: "font-family:" + MONO + ";font-size:" + (i === arr.length - 1 ? "15px" : "12.5px")
-            + ";color:var(--ink)"})),
-        diff: (w.diff || []).map(d => {
-          const same = d[1] === d[2];
-          return {field:d[0], from:d[1], to:d[2], same, changed: !same,
-            rowStyle: "display:flex;align-items:center;gap:12px;padding:11px 13px;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--r-sm,11px)"
-              + (same ? ";opacity:.6" : ""),
-            fromStyle: "font-family:" + MONO + ";font-size:12.5px;color:var(--faint)"
-              + (same ? "" : ";text-decoration:line-through"),
-            toStyle: "font-family:" + MONO + ";font-size:12.5px;color:" + (same ? "var(--dim)" : "var(--accent)")};
-        }),
-        thinking: (w.thinking || []).map((t, i) => ({n:String(i + 1), step:t[0], detail:t[1]})),
-        tools: (w.tools || []).map(t => ({name:t[0], effect:t[1],
-          style: "display:flex;align-items:center;gap:8px;padding:8px 11px;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--r-sm,9px)",
-          effectStyle: "font-family:" + MONO + ";font-size:9px;letter-spacing:0.1em;color:" + effectTint(t[1])})),
-        steps: wDoc.steps
-      };
-    })();
-
     const cell = (v, opts) => Object.assign({v, isText:true, isBadge:false, avatar:false, font:"inherit", size:"13px", color:INK, avatarRadius:"50%", initials:"", badgeBg:"", badgeColor:""}, opts || {});
     const initials = (name) => name.split(" ").map(w => w[0].toUpperCase()).slice(0,2).join("");
     const statusBadge = (s) => {
@@ -2693,10 +783,6 @@ export default class PulseLogic extends DCLogic {
       const c = map[s] || [DIM,"var(--track)"];
       return cell(s, {isBadge:true, isText:false, badgeColor:c[0], badgeBg:c[1]});
     };
-
-
-
-
 
     // Deltas are tinted against the card they sit on: the lime tile has dark ink,
     // so the dark-card GREEN/AMBER/RED tokens are illegible on it.
@@ -2786,18 +872,14 @@ export default class PulseLogic extends DCLogic {
        stateBg:"var(--accent-soft)", stateColor:LIME,
        description:"Stock by product, colour and size, incoming purchase orders and returns.",
        contributions:[{n:"40",k:"variants"},{n:"4",k:"purchase orders"},{n:"6",k:"returns"}]},
-      {label:"Trends", id:"trends", version:"demo", state:"installed", bg:"var(--surface)", border:"var(--track)",
-       stateBg:"var(--accent-soft)", stateColor:LIME,
-       description:"Trend spotting: search, social, own sales, returns and wholesale signals, a retail calendar, and signals that can be applied to the forecast. Search and social figures are a simulated index.",
-       contributions:[{n:"10",k:"signals"},{n:"6",k:"calendar moments"},{n:"1",k:"page"}]},
       {label:"Advertising", id:"ads", version:"demo", state:"installed", bg:"var(--surface)", border:"var(--track)",
        stateBg:"var(--accent-soft)", stateColor:LIME,
        description:"Meta Ads and Google Ads in one dashboard, checked against Shopify revenue and live stock. Demo connections with simulated data; proposed changes are drafts only.",
        contributions:[{n:"8",k:"campaigns"},{n:"5",k:"proposed changes"},{n:"1",k:"page"}]},
-      {label:"Accounting, Forecasting, Reporting", id:"finance", version:"demo", state:"installed", bg:"var(--surface)", border:"var(--track)",
+      {label:"Forecasting", id:"finance", version:"demo", state:"installed", bg:"var(--surface)", border:"var(--track)",
        stateBg:"var(--accent-soft)", stateColor:LIME,
-       description:"Operational view of invoices, bills and cash; demand and buying plan; four reports with CSV export. Not a ledger or tax product.",
-       contributions:[{n:"3",k:"pages"},{n:"4",k:"reports"}]}
+       description:"Demand, size and colour mix, and the buying plan. A planning view, not a ledger.",
+       contributions:[{n:"1",k:"page"}]}
     ];
 
     const notificationFeed = [
@@ -2838,21 +920,11 @@ export default class PulseLogic extends DCLogic {
       {group:"Actions", scope:"Actions", items:[
         {title:"Start a new conversation", meta:"Clears the current thread", hint:"ACTION", glyph:"action",
           go: () => { clearInterval(this._t); this.setState({page:"Home", thread:[], typed:0, draft:""}); }},
-        {title:"Review approvals waiting on you", meta:"Work · approvals", hint:"ACTION", glyph:"action",
-          go: () => this.setState({page:"Work", queue:"mine"})},
         {title:themeAction, meta:"Appearance", hint:"ACTION", glyph:"action",
           go: () => this.setState(p => p.theme === "light" ? {theme: p.darkTheme || this.props.theme || "jodz"} : {theme:"light", darkTheme:p.theme})},
         {title:"Open system health", meta:"Admin · modules and jobs", hint:"ACTION", glyph:"action",
           go: () => this.setState({page:"Settings"})}
       ]},
-      {group:"Agents", scope:"Agents", items:st.agents.slice(0, 4).map(a => ({title:a.name, meta:a.role, hint:a.group ? "GROUP" : "AGENT", glyph:"agent",
-        go: () => this.setState({page:"Agents", agentId:a.id})}))},
-      {group:"Work", scope:"Work", items:TASKS.slice(0, 4).map(t => ({title:t.title, meta:t.subject + " · due " + t.due, hint:"TASK", glyph:"task",
-        go: () => this.setState({page:"Work", queue:"mine"})}))},
-      {group:"Records", scope:"Records", items:PEOPLE.slice(0, 3).map(p => ({title:p[0], meta:p[1] + " · " + p[3], hint:"PERSON", glyph:"person",
-        go: () => this.setState({page:"Records", record:"person"})}))
-        .concat(ORGS.slice(0, 3).map(o => ({title:o[0], meta:o[1] + " · " + o[2] + " outstanding", hint:"ORG", glyph:"org",
-        go: () => this.setState({page:"Records", record:"org"})})))},
       {group:"Pages", scope:"Pages", items:ASPECT_DEFS.slice(0, 3).map(a => ({title:a.label, meta:a.description, hint:"AREA", glyph:"page",
         go: () => this.goPage("Dashboard", {aspect:a.id})}))
         .concat([{title:"Roles and grants", meta:"Who can see and do what", hint:"CONFIG", glyph:"page",
@@ -2862,7 +934,7 @@ export default class PulseLogic extends DCLogic {
     const match = g => g.items.filter(i => !ql || (i.title + " " + i.meta).toLowerCase().includes(ql));
     const scopeCounts = {All:0};
     SEARCH.forEach(g => { const n = match(g).length; scopeCounts.All += n; if (g.scope !== "All") scopeCounts[g.scope] = (scopeCounts[g.scope] || 0) + n; });
-    const palScopes = ["All","Actions","Agents","Work","Records","Pages"].map(name => {
+    const palScopes = ["All","Actions","Pages"].map(name => {
       const on = scope === name;
       return {label:name, count:scopeCounts[name] || 0,
         style:"flex:none;display:flex;align-items:center;gap:6px;height:26px;padding:0 11px;border-radius:var(--r-ctl,9px);cursor:pointer;font-size:12px;transition:background .2s var(--ease),color .2s var(--ease),border-color .2s var(--ease);"
@@ -2921,38 +993,13 @@ export default class PulseLogic extends DCLogic {
       Home: [
         {title:"Ask what changed today", meta:"Briefing · demo answer", icon:ICONS.helios, go: () => { clearInterval(this._t); this.setState({paletteOpen:false, query:"", page:"Home"}); this.ask("What changed today?"); }},
         {title:"Action inbox", meta:openKeys.length + " waiting on you", icon:ICONS.inbox, go: jump("Home", {open:null})},
-        {title:"Edit widgets", meta:"Rearrange the right rail", icon:ICONS.dash, go: jump("Home", {widgetEdit:true})},
-        {title:"My work", meta:"Tasks due today", icon:ICONS.work, go: jump("Work", {queue:"mine"})}
-      ],
-      Work: [
-        {title:"Approvals awaiting you", meta:"Work · approvals", icon:ICONS.approvals, go: jump("Work", {workSection:"approvals"})},
-        {title:"Overdue queue", meta:"Past the due time", icon:ICONS.work, go: jump("Work", {queue:"overdue"})},
-        {title:"Unassigned", meta:"Nobody owns these yet", icon:ICONS.teams, go: jump("Work", {queue:"unassigned"})},
-        {title:"Schedules", meta:"Recurring routines", icon:ICONS.visits, go: jump("Work", {workSection:"schedules"})}
-      ],
-      Records: [
-        {title:"File tree", meta:"Browse indexed documents", icon:ICONS.files, go: jump("Records", {recSection:"files"})},
-        {title:"Contacts", meta:"People and organisations", icon:ICONS.people, go: jump("Records", {recSection:"contacts"})},
-        {title:"Ontology graph", meta:"How records relate", icon:ICONS.navRecords, go: jump("Records", {recSection:"ontology"})},
-        {title:"New record", meta:"From a template", icon:ICONS.modules, go: () => this.setState({paletteOpen:false, query:"", page:"Records", newRecOpen:true, newRecName:"", newRecTemplate:"Field sheet"})}
+        {title:"Edit widgets", meta:"Rearrange the right rail", icon:ICONS.dash, go: jump("Home", {widgetEdit:true})}
       ],
       Dashboard: [
         {title:"Sales", meta:"Pipeline and quotes", icon:ICONS.insights, go: jump("Dashboard", {aspect:"sales"})},
         {title:"Cash", meta:"Owed, overdue, collected", icon:ICONS.navDash, go: jump("Dashboard", {aspect:"cash"})},
         {title:"Last 7 days", meta:"Shorten the range", icon:ICONS.autos, go: jump("Dashboard", {range:"7d"})},
         {title:"Edit metrics", meta:"Pick the five on top", icon:ICONS.dash, go: jump("Dashboard", {kpiEdit:true})}
-      ],
-      Agents: [
-        {title:"Month-end close", meta:"Group of three agents", icon:ICONS.agents, go: jump("Agents", {agentId:"monthend"})},
-        {title:"Credit Control", meta:"Watches payment behaviour", icon:ICONS.agents, go: jump("Agents", {agentId:"credit"})},
-        {title:"Build an agent", meta:"Start from a blank brief", icon:ICONS.modules, go: () => this.setState({paletteOpen:false, query:"", page:"Agents", builderOpen:true, builderMode:"new"})},
-        {title:"Tools and grants", meta:"What agents may do", icon:ICONS.navAdmin, go: jump("Settings")}
-      ],
-      Activity: [
-        {title:"Needs attention", meta:"Failures and retries", icon:ICONS.health, go: jump("Activity", {actKpi:"attention"})},
-        {title:"Agent events", meta:"Only what agents did", icon:ICONS.agents, go: jump("Activity", {actKpi:"ai"})},
-        {title:"People events", meta:"Only what the team did", icon:ICONS.people, go: jump("Activity", {actKpi:"people"})},
-        {title:"Everything", meta:"Full audit trail", icon:ICONS.navActivity, go: jump("Activity", {actKpi:"all"})}
       ],
       Settings: [
         {title:"Roles and grants", meta:"Who can see and do what", icon:ICONS.navAdmin, go: jump("Settings")},
@@ -2963,14 +1010,10 @@ export default class PulseLogic extends DCLogic {
     };
     const palPageRaw = KITS[page] || [
       {title:"Ask about this page", meta:"Fixture answers from the demo data", icon:ICONS.helios, go: () => { this.setState({paletteOpen:false, query:"", page:"Home"}); this.ask("What should I know about " + page + "?"); }},
-      {title:"Action inbox", meta:openKeys.length + " waiting on you", icon:ICONS.inbox, go: jump("Home")},
-      {title:"My work", meta:"Tasks due today", icon:ICONS.work, go: jump("Work", {queue:"mine"})},
-      {title:"Records", meta:"Every record you can see", icon:ICONS.navRecords, go: jump("Records")}
+      {title:"Action inbox", meta:openKeys.length + " waiting on you", icon:ICONS.inbox, go: jump("Home")}
     ];
     const FREQ = [
       {title:"Action inbox", count:"31×", icon:ICONS.inbox, go: jump("Home")},
-      {title:"Approvals", count:"24×", icon:ICONS.approvals, go: jump("Work", {workSection:"approvals"})},
-      {title:"Cash Outlook", count:"18×", icon:ICONS.navBooks, go: () => { this.setState({paletteOpen:false, query:""}); jodzGoTo("Accounting", "cash"); }},
       {title:"JOD-W1041 · Meadow Tack", count:"12×", icon:ICONS.navSales, go: () => { this.setState({paletteOpen:false, query:""}); jodzOpenRecord({kind:"order", id:"JOD-W1041"}); }},
       {title:"Buying Plan", count:"9×", icon:ICONS.navForecast, go: () => { this.setState({paletteOpen:false, query:""}); jodzGoTo("Forecasting", "buying"); }},
       {title:"Stock", count:"7×", icon:ICONS.navStock, go: () => { this.setState({paletteOpen:false, query:""}); jodzGoTo("Inventory", "stock"); }}
@@ -2979,12 +1022,7 @@ export default class PulseLogic extends DCLogic {
       {title:"Home", icon:ICONS.navHome, go: jump("Home")},
       {title:"Sales & Wholesale", icon:ICONS.navSales, go: jump("Dashboard")},
       {title:"Inventory", icon:ICONS.navStock, go: jump("Inventory")},
-      {title:"Trends", icon:ICONS.navTrends, go: jump("Trends")},
       {title:"Advertising", icon:ICONS.navAds, go: jump("Advertising")},
-      {title:"Work", icon:ICONS.navWork, go: jump("Work")},
-      {title:"Records", icon:ICONS.navRecords, go: jump("Records")},
-      {title:"Agents", icon:ICONS.navAgents, go: jump("Agents")},
-      {title:"Activity", icon:ICONS.navActivity, go: jump("Activity")},
       {title:"Settings", icon:ICONS.navAdmin, go: jump("Settings")}
     ];
     const RECENT_WHEN = ["2 min", "18 min", "1 h", "yesterday"];
@@ -3039,9 +1077,7 @@ export default class PulseLogic extends DCLogic {
     const DIRS_ORDER = ["People","Organisations","Teams","Locations","Site visits"];
     const JODZ_SECTIONS = {
       Inventory: [["stock","Stock"],["incoming","Incoming Stock"],["returns","Returns & Adjustments"]],
-      Accounting: [["overview","Overview"],["invoices","Invoices & Bills"],["cash","Cash Outlook"]],
       Forecasting: [["demand","Demand"],["matrix","Size & Colour"],["buying","Buying Plan"]],
-      Trends: [["signals","Signals"],["search","Search & Social"],["calendar","Calendar"]],
       Advertising: [["overview","Overview"],["meta","Meta Ads"],["google","Google Ads"]]
     };
     const ADMIN_ORDER = ["Automations","System health","Installed modules"];
@@ -3054,25 +1090,9 @@ export default class PulseLogic extends DCLogic {
         String(ADMIN_CARDS.filter(c => c.group === grp[0]).length)));
       contextHint = "ADMIN · 13 AREAS";
       searchHint = "Search settings";
-    } else if (page === "Activity"){
-      contextNav = [["all","Everything"],["people","People"],["ai","Agents"],["attention",(st.w - (st.railOpen ? 252 : 68)) < 1000 ? "Attention" : "Needs attention"]]
-        .map(k => seg(k[1], st.actKpi === k[0], () => this.setState({actKpi:k[0]})));
-      contextHint = "DEMO · EVENT LOG";
-      searchHint = "Search the audit trail";
-    } else if (page === "Records"){
-      contextNav = REC_SECTIONS.map(s => seg(s.label, st.recSection === s.id,
-        () => this.setState({recSection:s.id})));
-      contextHint = "RECORDS · " + recSec.label.toUpperCase();
-      searchHint = recSec.id === "ontology" ? "Search the ontology" : "Search " + recSec.label.toLowerCase();
-    } else if (page === "Work"){
-      contextNav = WORK_SECTIONS.map(s => seg(s.label, st.workSection === s.id,
-        () => this.setState({workSection:s.id, opsOpen:null}), String(WORK_COUNTS[s.id])));
-      contextHint = "WORK · " + workSec.label.toUpperCase();
-      searchHint = "Search " + workSec.label.toLowerCase();
-    } else if (JODZ_SECTIONS[page] || page === "Reporting"){
+    } else if (JODZ_SECTIONS[page]){
       const cur = jodzState().sections[page];
-      contextNav = page === "Reporting" ? [seg("Reporting", true, () => {}), seg("Home", false, () => this.go("Home"))]
-        : JODZ_SECTIONS[page].map(x => seg(x[1], cur === x[0], () => jodzSetSection(page, x[0])));
+      contextNav = JODZ_SECTIONS[page].map(x => seg(x[1], cur === x[0], () => jodzSetSection(page, x[0])));
       contextHint = "JOD-Z · SNAPSHOT 26 SEP 2026";
       searchHint = "Search " + page.toLowerCase();
     } else if (page === "Home" || page === "Dashboard"){
@@ -3082,21 +1102,12 @@ export default class PulseLogic extends DCLogic {
       ];
       contextHint = page === "Home" ? "BRIEFING · " + openKeys.length + " WAITING" : "JOD-Z · LAST 30 DAYS";
       searchHint = page === "Dashboard" ? "Search orders and retailers" : "Search every record you can see";
-    } else if (page === "Agents"){
-      contextNav = [];
-      contextHint = "";
-      searchHint = "Search agents";
     } else if (page === "Action inbox"){
       contextNav = ["All","Approvals","Alerts","Work","Automations"].map(fl =>
         seg(fl, st.inboxFilter === fl, () => this.setState({inboxFilter:fl, open:null}),
           fl === "All" ? String(openKeys.length) : String(openKeys.filter(k => ITEMS[k].group === fl).length)));
       contextHint = "PROVIDERS · CORE + MODULES";
       searchHint = "Search the inbox";
-    } else if (page === "Work"){
-      contextNav = [["mine","My work"],["team","Team"],["overdue","Overdue"],["upcoming","Next 7 days"],["unassigned","Unassigned"],["all","Everything"]]
-        .map(q => seg(q[1], st.queue === q[0], () => this.setState({queue:q[0]}), String(queueCounts[q[0]])));
-      contextHint = "QUEUES · CORE:TASK:VIEW";
-      searchHint = "Search tasks";
     } else if (page === "Insights"){
       contextNav = [["7d","7 days"],["30d","30 days"],["90d","90 days"]].map(r => seg(r[1], st.range === r[0], () => this.setState({range:r[0]})));
       contextHint = "METRICS FROM THE REGISTRY";
@@ -3130,12 +1141,7 @@ export default class PulseLogic extends DCLogic {
     const roomy = st.w >= 1320, mid = st.w >= 1120;
     return {
       nav, contextNav, contextHint, searchHint, queueTasks,
-      isRecords: page === "Records",
-      isActivity: page === "Activity",
-      act: actModel,
       admin: adminModel,
-      showRecordsWash: page === "Records" && recSec.id !== "ontology",
-      rec: recModel, tree: treeModel, onto: ontoModel, newRec: newRecModel, graph: graphModel,
 
       /* rail */
       railOuter: "position:relative;z-index:2;width:" + (railOpen ? "252px" : "68px")
@@ -3156,10 +1162,6 @@ export default class PulseLogic extends DCLogic {
       railLabel: railOpen ? "Collapse sidebar" : "Expand sidebar",
       toggleRail: () => this.setState(prev => ({railOpen: !prev.railOpen, hovered:null})),
       settingsInlineStyle: inlineStyle(st.railHov === "settings", page === "Settings"),
-
-      /* header zones */
-      isAgents: page === "Agents",
-      showPillNav: page !== "Agents",
 
       /* home widgets */
       widgetHint: st.widgetEdit ? "EDITING BOARD" : String(st.widgets.length) + " WIDGETS",
@@ -3187,7 +1189,7 @@ export default class PulseLogic extends DCLogic {
 
       /* dashboard */
       isDashboard: false,
-      isJodz: ["Dashboard","Inventory","Accounting","Forecasting","Trends","Advertising","Reporting"].indexOf(page) > -1,
+      isJodz: ["Dashboard","Inventory","Forecasting","Advertising"].indexOf(page) > -1,
       jodzPage: page,
       dashTitle: "Jod-Z · " + areaLabel,
       kpiEdit: st.kpiEdit,
@@ -3364,7 +1366,6 @@ export default class PulseLogic extends DCLogic {
         };
       })(),
       filterMenuOpen: st.filterMenuOpen,
-      toggleFilterMenu: () => this.setState(prev => ({filterMenuOpen: !prev.filterMenuOpen})),
       filterGroups: FILTER_GROUPS.map(g => ({title:g.title, items:g.items.map(label => {
         const asp = ASPECT_DEFS.find(a => a.label === label);
         const on = asp ? st.aspect === asp.id : st.aspect === label;
@@ -3383,124 +1384,6 @@ export default class PulseLogic extends DCLogic {
       addCustomFilter: () => this.addCustom(),
 
       /* work: tasks, approvals, workflows, schedules */
-      work: (() => {
-        const sec = WORK_SECTIONS.find(s => s.id === st.workSection) || WORK_SECTIONS[0];
-        const ico = {
-          open:"M4 6.5h3 M4 12h3 M4 17.5h3 M10 6.5h10 M10 12h10 M10 17.5h10",
-          today:"M8 4v3 M16 4v3 M4.5 9.5h15 M6.4 6h11.2A1.9 1.9 0 0 1 19.5 8v10a1.9 1.9 0 0 1-1.9 1.9H6.4A1.9 1.9 0 0 1 4.5 18V8A1.9 1.9 0 0 1 6.4 6Z",
-          overdue:"M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z M12 7.6v5 M12 16h.01",
-          done:"M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z M8.4 12.2l2.4 2.4 4.8-4.8"
-        };
-        const stats = {
-          tasks: [["OPEN FOR ME", String(openWork.length), INK, ico.open],
-                  ["DUE SOON", String(openWork.filter(t => t.view === "Due soon").length), INK, ico.today],
-                  ["OVERDUE", String(openWork.filter(t => t.late).length), RED, ico.overdue],
-                  ["DONE", String(allWorkTasks.filter(isDoneW).length), INK, ico.done]],
-          approvals: [["AWAITING YOU", String(pendingApprovals), AMBER, ico.open],
-                  ["PURCHASES", String(APPROVALS.filter(a => a._ap.kind === "Purchase" && bucketOf(a) === "Awaiting you").length), INK, ico.today],
-                  ["PARTIAL DISPATCHES", String(APPROVALS.filter(a => a._ap.kind === "Partial dispatch" && bucketOf(a) === "Awaiting you").length), INK, ico.overdue],
-                  ["DECIDED IN DEMO", String(APPROVAL_COUNTS["Decided"]), INK, ico.done]],
-          workflows: [["LIVE", "3", INK, ico.open],
-                  ["RUNS TODAY", "42", INK, ico.today],
-                  ["FAILING", "1", RED, ico.overdue],
-                  ["OK LAST 14 DAYS", "96%", INK, ico.done]],
-          workflows: [], schedules: []
-        }[sec.id];
-        return {
-          title:sec.label, blurb:sec.blurb,
-          isTasks: sec.id === "tasks", isApprovals: sec.id === "approvals",
-          isWorkflows: sec.id === "workflows", isSchedules: sec.id === "schedules",
-          showBlurb: sec.id === "workflows" || sec.id === "schedules",
-          showOpsHeader: sec.id === "workflows" || sec.id === "schedules",
-          hasStats: sec.id === "tasks" || sec.id === "approvals", hasViews: sec.views.length > 0,
-          add: () => this.setState({workSection:"tasks"}),
-          stats: stats.map(s => ({label:s[0], value:s[1], color:s[2], icon:s[3]})),
-          filters: sec.filters,
-          viewTrack: segTrack(""),
-          viewThumb: segThumb(sec.views.length, Math.max(0, sec.views.indexOf(workView)), "var(--pill-bg)"),
-          views: sec.views.map(v => ({label:v, active: workView === v, inactive: workView !== v,
-            pick: () => this.setState(prev => ({workViews: Object.assign({}, prev.workViews, {[sec.id]: v})}))}))
-        };
-      })(),
-      timer: (() => {
-        const running = st.timerRunning, task = st.timerTask;
-        return {
-          eyebrow:"FOCUS TIMER",
-          state: running ? "RUNNING" : task ? "PAUSED" : "IDLE",
-          stateColor: running ? LIME : "var(--faint)",
-          display: st.timerPreset ? String(st.timerPreset).padStart(2, "0") + ":00" : "00:00",
-          ringColor: running ? LIME : "var(--border)",
-          /* A second, inset ring — it turns slowly while the timer runs. */
-          innerRingStyle: "position:absolute;inset:9px;border-radius:50%;border:1px solid "
-            + (running ? LIME : "var(--border)") + ";opacity:" + (running ? ".8" : ".45"),
-          title: task || "No task started",
-          subtitle: task ? "Timing this task. Stopping logs the minutes against it."
-            : "Hit Start on a task, or pick a preset",
-          presets: [15, 25, 50].map(m => ({label:m + "m",
-            style: "height:30px;padding:0 13px;border-radius:var(--r-ctl,9px);cursor:pointer;font-size:12px;white-space:nowrap;"
-              + "transition:background .2s var(--ease),border-color .2s var(--ease),color .2s var(--ease);"
-              + (st.timerPreset === m ? "background:var(--accent-faint);border:1px solid var(--accent-line);color:var(--ink)"
-                                      : "background:var(--surface-2);border:1px solid var(--border);color:var(--body)"),
-            pick: () => this.setState({timerPreset:m})})),
-          buttonBg: running ? "var(--surface-2)" : "var(--ink)",
-          buttonInk: running ? "var(--ink)" : "var(--bg)",
-          buttonLabel: running ? "Pause" : "Start",
-          buttonIcon: running ? "M9 5.5v13 M15 5.5v13" : "M7 4.5v15l13-7.5-13-7.5Z",
-          toggle: () => this.setState(prev => ({timerRunning: !prev.timerRunning,
-            timerTask: prev.timerTask || "Review drafted reminder for JOD-INV2031",
-            timerPreset: prev.timerPreset || 25})),
-          reset: () => this.setState({timerRunning:false, timerTask:null, timerPreset:null}),
-          complete: () => this.setState({timerRunning:false, timerTask:null})
-        };
-      })(),
-      newTask: st.newTask,
-      setNewTask: (e) => this.setState({newTask:e.target.value}),
-      onNewTaskKey: (e) => { if (e.key === "Enter") this.addWorkTask(); },
-      addTask: () => this.addWorkTask(),
-      newPriority: st.newPriority,
-      newPriorityBg: st.newPriority === "High" ? "var(--warn-soft)" : st.newPriority === "Low" ? "var(--surface-2)" : "var(--accent-faint)",
-      newPriorityBorder: st.newPriority === "High" ? "var(--warn-soft)" : st.newPriority === "Low" ? "var(--border)" : "var(--accent-line)",
-      newPriorityColor: st.newPriority === "High" ? AMBER : st.newPriority === "Low" ? DIM : "var(--ink)",
-      cyclePriority: () => this.setState(prev => ({newPriority:
-        prev.newPriority === "High" ? "Medium" : prev.newPriority === "Medium" ? "Low" : "High"})),
-      workTasks: allWorkTasks.filter(t => workView === "Done" ? isDoneW(t) : !isDoneW(t) && (workView === "Open" || workView === "All tasks"
-          || (workView === "Due soon" && t.view === "Due soon") || (workView === "High priority" && t.priority === "High"))).map(t => {
-        const done = isDoneW(t);
-        const statusTint = {"In progress":[LIME,"var(--accent-faint)"], "Review":[AMBER,"var(--warn-soft)"],
-          "Not started":[DIM,"var(--track)"], "Done":[GREEN,"var(--ok-soft)"]}[done ? "Done" : t.status] || [DIM,"var(--track)"];
-        return {
-          title:t.title, who:t.who, priority:t.priority,
-          status: done ? "Done" : t.status,
-          checkOpacity: done ? "1" : "0", fill: done ? LIME : "transparent",
-          ring: done ? LIME : "var(--border-strong)",
-          color: done ? FAINT : INK, strike: done ? "line-through" : "none",
-          statusStyle: "flex:none;display:flex;align-items:center;gap:7px;padding:5px 12px;border-radius:7px;font-size:12px;"
-            + "background:" + statusTint[1] + ";color:" + statusTint[0],
-          statusDot: "width:6px;height:6px;border-radius:2px;background:" + statusTint[0],
-          prioStyle: "flex:none;display:flex;align-items:center;gap:6px;padding:5px 12px;border-radius:7px;font-size:12px;"
-            + (t.priority === "High" ? "background:var(--warn-soft);color:" + AMBER
-               : t.priority === "Low" ? "background:var(--track);color:" + DIM
-               : "background:var(--accent-faint);color:var(--ink)"),
-          meta: [
-            {label:t.due, icon:"M8 4v3 M16 4v3 M4.5 9.5h15 M6.4 6h11.2A1.9 1.9 0 0 1 19.5 8v10a1.9 1.9 0 0 1-1.9 1.9H6.4A1.9 1.9 0 0 1 4.5 18V8A1.9 1.9 0 0 1 6.4 6Z",
-             color: t.late && !done ? RED : DIM},
-            {label:t.client, icon:"M4.5 20V6.4A1.4 1.4 0 0 1 5.9 5h6.2a1.4 1.4 0 0 1 1.4 1.4V20 M13.5 10.5h4.6A1.4 1.4 0 0 1 19.5 12v8 M3 20h18", color:DIM},
-            {label:t.day, icon:"M7 4.5v3 M17 4.5v3 M4 10h16 M5.6 6.6h12.8A1.6 1.6 0 0 1 20 8.2v10.2a1.6 1.6 0 0 1-1.6 1.6H5.6A1.6 1.6 0 0 1 4 18.4V8.2a1.6 1.6 0 0 1 1.6-1.6Z", color:DIM},
-            {label:t.mins, icon:"M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z M12 7.6V12l3 1.8", color:DIM}
-          ],
-          open: t.open,
-          toggle: () => t.jodz ? jodzCompleteTask(t.id) : this.setState(prev => ({done: Object.assign({}, prev.done, {[t.id]: !done})})),
-          start: () => this.setState({timerTask:t.title, timerRunning:true, timerPreset: st.timerPreset || 25})
-        };
-      }),
-      workTasksEmpty: false,
-      workViewer: workViewer,
-      workApprovals: approvalRows,
-      workApprovalsEmpty: approvalRows.length === 0,
-      ops: opsModel,
-      cal: calModel,
-      detail: detailModel,
-      builder: builderModel,
       _unusedWorkflows: WORKFLOWS.map(w => ({
         name:w.name, trigger:w.trigger, lastRun:w.lastRun, result:w.result, runSummary:w.runSummary,
         state:w.state,
@@ -3557,83 +1440,12 @@ export default class PulseLogic extends DCLogic {
       }),
 
       /* agents */
-      agentQuery: st.agentQuery,
-      agentQueryOn: (st.agentQuery || "").length > 0,
-      clearAgentQuery: () => this.setState({agentQuery:""}),
-      setAgentQuery: (e) => this.setState({agentQuery:e.target.value}),
       agentListHint: agentMatches.length + " AGENTS · " + st.agents.length + " INSTALLED",
-      agentListEmpty: agentMatches.length === 0,
-      groupName: st.groupNames[activeAgent.id] !== undefined ? st.groupNames[activeAgent.id] : activeAgent.name,
-      setGroupName: (e) => { const v = e.target.value, id = activeAgent.id;
-        this.setState(prev => ({groupNames: Object.assign({}, prev.groupNames, {[id]: v})})); },
-      groupMembers: (activeAgent.members || []).map((mid, i) => {
-        const m = AGENT_DEFS.find(a => a.id === mid) || {shape:"crown-pebble", tint:"#191c1f", state:"idle"};
-        return {shape:m.shape, tint:m.tint, state:m.state,
-          chipStyle: "display:block;flex:none;border-radius:var(--r-sm,9px);" + (i ? "margin-left:-6px" : "")};
-      }),
-      agentList: agentMatches.map(a => ({
-        name: st.groupNames[a.id] !== undefined ? st.groupNames[a.id] : a.name,
-        shape:a.shape, tint:a.tint, state:a.state, when:a.when, preview:a.preview,
-        isGroup: a.group === true, isSolo: a.group !== true,
-        // A fixed -6px overlap: each face keeps 18 of its 24px visible, so the
-        // eyes of every member stay readable however many there are.
-        stack: (a.members || []).slice(0, 3).map((mid, i) => {
-          const m = AGENT_DEFS.find(x => x.id === mid) || {shape:"crown-pebble", tint:"#191c1f", state:"idle"};
-          return {shape:m.shape, tint:m.tint, state:m.state,
-            style: "display:block;flex:none;border-radius:var(--r-sm,9px);" + (i ? "margin-left:-6px" : "")};
-        }),
-        rowStyle: "position:relative;display:flex;align-items:flex-start;gap:13px;padding:13px 14px 13px 22px;border-radius:16px;cursor:pointer;"
-          + "transition:background .2s var(--ease);"
-          + (a.id === st.agentId ? "background:var(--surface-strong)" : "background:none"),
-        unread: a.id !== st.agentId && /now|m$|min/.test(String(a.when || "")),
-        open: () => this.setState({agentId:a.id})
-      })),
-      agent: {name: st.groupNames[activeAgent.id] !== undefined ? st.groupNames[activeAgent.id] : activeAgent.name,
-              shape:activeAgent.shape, tint:activeAgent.tint, state:activeAgent.state, role:activeAgent.role,
-              isGroup: activeAgent.group === true, isSolo: activeAgent.group !== true,
-              statusLabel: activeAgent.group
-                ? activeAgent.members.length + " agents · " + STATE_LABELS[activeAgent.state]
-                : STATE_LABELS[activeAgent.state] || "idle"},
-      agentPlaceholder: "Message " + activeAgent.name,
       agentHasDraft: (st.agentDraft || "").trim().length > 0,
-      agentPrimaryTitle: (st.agentDraft || "").trim() ? "Send" : "Dictate",
-      agentPrimary: () => { if ((st.agentDraft || "").trim()) this.sendToAgent(st.agentDraft.trim()); else this.setState(prev => ({agentMic: !prev.agentMic})); },
-      agentPrimaryStyle: "width:30px;height:30px;flex:none;border:0;border-radius:999px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background .22s var(--ease),color .22s var(--ease),transform .18s var(--ease);"
-        + ((st.agentDraft || "").trim()
-            ? "background:var(--accent-fill,var(--accent));color:var(--on-accent);box-shadow:var(--accent-glow,none)"
-            : (st.agentMic ? "background:var(--accent-soft);color:var(--accent)" : "background:var(--surface);color:var(--dim)")),
-      agentMicStyle: "position:absolute;inset:0;transition:transform .28s var(--ease),opacity .2s var(--ease);"
-        + ((st.agentDraft || "").trim() ? "transform:scale(.6) rotate(-20deg);opacity:0" : "transform:none;opacity:1"),
-      agentSendStyle: "position:absolute;inset:0;transition:transform .28s var(--ease),opacity .2s var(--ease);"
-        + ((st.agentDraft || "").trim() ? "transform:none;opacity:1" : "transform:scale(.6) rotate(20deg);opacity:0"),
-      agentThread: activeThread.map((m, i) => {
-        const isUser = m.kind === "user";
-        // In a group, attribute a run of messages to whichever agent is speaking.
-        const from = m.from ? AGENT_DEFS.find(a => a.id === m.from) : null;
-        const prevFrom = i > 0 ? activeThread[i-1].from : null;
-        return {
-          hasSender: !!from && m.from !== prevFrom,
-          sender: from ? from.name : "",
-          senderShape: from ? from.shape : "crown-pebble", senderTint: from ? from.tint : "#191c1f",
-          senderState: from ? from.state : "idle",
-          alignItems: isUser ? "flex-end" : "flex-start",
-          isStamp: m.kind === "stamp", isRoutine: m.kind === "routine",
-          isBubble: m.kind === "user" || m.kind === "agent",
-          text:m.text, routine:m.routine || "", hasLines: !!m.lines, lines: m.lines || [],
-          wrapStyle: "display:flex;margin-bottom:14px;" + (isUser ? "justify-content:flex-end" : "justify-content:flex-start"),
-          bubbleStyle: "padding:10px 15px;font-size:14.5px;line-height:1.45;border-radius:"
-            + (isUser ? "20px 20px 4px 20px" : "20px 20px 20px 4px") + ";"
-            + (isUser ? "background:var(--accent);color:var(--on-accent)"
-                      : "background:var(--surface-strong);color:var(--ink)")
-        };
-      }),
-      agentDraft: st.agentDraft,
-      setAgentDraft: (e) => this.setState({agentDraft:e.target.value}),
-      onAgentKey: (e) => { if (e.key === "Enter" && st.agentDraft.trim()) this.sendToAgent(st.agentDraft.trim()); },
       sendAgent: () => { if (st.agentDraft.trim()) this.sendToAgent(st.agentDraft.trim()); },
 
       /* mini chat */
-      showFab: page !== "Home" && page !== "Agents",
+      showFab: page !== "Home",
       fabTitle: st.miniOpen ? "Close chat" : "Ask Pulse",
       fabChatStyle: "position:absolute;inset:0;transition:transform .34s var(--ease),opacity .24s var(--ease);"
         + (st.miniOpen ? "transform:rotate(-90deg) scale(.7);opacity:0" : "transform:none;opacity:1"),
@@ -3684,14 +1496,14 @@ export default class PulseLogic extends DCLogic {
           {num:"01", title:"Meetings", icon:"M8 4v3 M16 4v3 M4.5 9.5h15 M6.4 6h11.2A1.9 1.9 0 0 1 19.5 8v10a1.9 1.9 0 0 1-1.9 1.9H6.4A1.9 1.9 0 0 1 4.5 18V8A1.9 1.9 0 0 1 6.4 6Z",
             statusText:"Clear", statusColor:"var(--faint)", open:meetingsOpen, toggle:toggle("meetings"),
             isEmpty:true, emptyText:"Nothing scheduled.", rows:[],
-            hasLink:true, linkLabel:"Full calendar", linkGo: () => this.setState({page:"Work", workSection:"schedules", miniOpen:false}),
+            hasLink:false,
             wrapStyle: "background:var(--surface);border:1px solid var(--border);border-radius:var(--card-r,18px);overflow:hidden"},
           {num:"02", title:"Tasks", icon:"M5 6.5h2l1.4 1.4L11 5.5 M5 12.5h2l1.4 1.4 2.6-2.4 M5 18.5h2l1.4 1.4 2.6-2.4 M15 6.5h4 M15 12.5h4 M15 18.5h4",
             statusText:openTasks.length + " open", statusColor:"var(--accent)", open:tasksOpen, toggle:toggle("tasks"),
             isEmpty:openTasks.length === 0, emptyText:"Nothing open.",
             rows: openTasks.map(t => ({isCheck:true, title:t.title,
               hasTag:true, tag:t.priority, tagStyle:"flex:none;padding:2px 9px;border-radius:var(--chip-r,6px);font-size:11px;background:var(--ok-soft);color:var(--ok)"})),
-            hasLink:true, linkLabel:"All tasks", linkGo: () => this.setState({page:"Work", workSection:"tasks", miniOpen:false}),
+            hasLink:false,
             wrapStyle: "background:var(--surface);border:1px solid var(--border);border-radius:var(--card-r,18px);overflow:hidden"},
           {num:"03", title:"Notifications", icon:"M12 4a5.5 5.5 0 0 0-5.5 5.5v3.2L5 16h14l-1.5-3.3V9.5A5.5 5.5 0 0 0 12 4Z M9.8 19a2.2 2.2 0 0 0 4.4 0",
             statusText:"12 unread", statusColor:"#6ad0f0", open:notifsOpen, toggle:toggle("notifications"),
@@ -3717,36 +1529,6 @@ export default class PulseLogic extends DCLogic {
       sendMini: () => { if (st.miniDraft.trim()) this.askMini(st.miniDraft.trim()); },
 
       /* agent builder */
-      builderOpen: st.builderOpen,
-      closeBuilder: () => { clearInterval(this._trainTimer); this.setState({builderOpen:false, training:false}); },
-      openBuilder: () => this.setState({page:"Agents", builderOpen:true, builderMode:"new", trained:false, training:false, trainPhase:0, briefThread:[], briefDraft:"", briefPicks:{}, tuneThread:[], tuneDraft:"", sysPrompt:undefined,
-        agentSpec:{name:"", shape:"crown-pebble", tint:"#191c1f", persona:"", personality:"Straight-talking",
-               answer:"Short answers", context:["Organisations","Tasks"], skills:["Search records","Summarise activity"], tasks:[]}}),
-      openBuilderForAgent: () => this.setState({builderOpen:true, builderMode:"tune", trained:true, training:false, trainPhase:0, briefThread:[], briefDraft:"", briefPicks:{}, tuneThread:[], tuneDraft:"", sysPrompt:undefined,
-        agentSpec:{name:activeAgent.name, shape:activeAgent.shape || "crown-pebble", tint:activeAgent.tint || "#191c1f",
-               persona:activeAgent.role, personality:"Straight-talking", answer:"Short answers",
-               context:["Organisations","Tasks","Invoices"], skills:["Search records","Summarise activity","Draft email"], tasks:[]}}),
-      draftAgent: {name:st.agentSpec.name, persona:st.agentSpec.persona,
-        shape:st.agentSpec.shape, tint:st.agentSpec.tint, state:"working",
-        shapeLabel: (FACE_SHAPES.find(s => s[0] === st.agentSpec.shape) || FACE_SHAPES[0])[1]},
-      builderHint: st.builderMode === "tune" ? "TRAINED ON YOUR ONTOLOGY · READY" : "NEW AGENT · NOT SAVED YET",
-      isTune: st.builderMode === "tune",
-      isNewAgent: st.builderMode !== "tune",
-      faceTopStyle: st.builderMode === "tune" ? "margin-top:24px" : "",
-      syncStats: [
-        {value:"14", label:"ENTITY TYPES"},
-        {value:"4,820", label:"RECORDS READ"},
-        {value:"2m", label:"LAST SYNC"}
-      ],
-      sysPrompt: this.systemPrompt(),
-      setSysPrompt: (e) => this.setState({sysPrompt:e.target.value}),
-      sysMeta: "WRITTEN BY THE AGENT",
-      sysTokens: String(Math.max(1, Math.round(this.systemPrompt().length / 4))).replace(/\B(?=(\d{3})+$)/g, ",") + " tokens",
-      sysLines: this.systemPrompt().split("\n").length + " lines",
-      sysEdited: st.sysPrompt !== undefined && st.sysPrompt !== null,
-      sysClean: st.sysPrompt === undefined || st.sysPrompt === null,
-      revertPrompt: () => this.setState({sysPrompt:null, tuneThread:[]}),
-      retrain: () => this.startTraining(),
       tuneCount: (st.tuneThread || []).filter(m => m.role === "you").length,
       tuneCountLabel: (st.tuneThread || []).filter(m => m.role === "you").length + " change"
         + ((st.tuneThread || []).filter(m => m.role === "you").length === 1 ? "" : "s"),
@@ -3758,10 +1540,6 @@ export default class PulseLogic extends DCLogic {
         "Flag anything over €5,000 to me first",
         "Keep answers to three sentences"
       ].map(q => ({label:q, apply: () => { this.setState({tuneDraft:q}, () => this.sendTune()); }})),
-      tuneDraft: st.tuneDraft || "",
-      setTuneDraft: (e) => this.setState({tuneDraft:e.target.value}),
-      onTuneKey: (e) => { if (e.key === "Enter" && !e.shiftKey){ e.preventDefault(); this.sendTune(); } },
-      sendTune: () => this.sendTune(),
       hasTuneThread: (st.tuneThread || []).length > 0,
       noTuneThread: (st.tuneThread || []).length === 0,
       tuneThread: (st.tuneThread || []).map(m => ({
@@ -3772,28 +1550,6 @@ export default class PulseLogic extends DCLogic {
               ? "background:var(--surface-strong);border:1px solid var(--border);color:var(--ink);border-bottom-right-radius:5px"
               : "background:var(--accent-faint);border:1px solid var(--accent-line);color:var(--ink);border-bottom-left-radius:5px")
       })),
-      setAgentName: (e) => this.setSpec({name:e.target.value}),
-      setPersona: (e) => this.setSpec({persona:e.target.value}),
-      faceChoices: FACE_SHAPES.map(sh => {
-        const on = st.agentSpec.shape === sh[0];
-        return {shape:sh[0], label:sh[1], state:"working", tint:st.agentSpec.tint,
-          style: "display:flex;align-items:center;justify-content:center;padding:6px;border-radius:8px;cursor:pointer;"
-            + "transition:background .2s var(--ease),border-color .2s var(--ease),transform .2s var(--ease);"
-            + (on ? "background:var(--accent-faint);border:1px solid var(--accent);transform:translateY(-1px)"
-                  : "background:var(--surface);border:1px solid var(--border)"),
-          pick: () => this.setSpec({shape:sh[0]})};
-      }),
-      tintChoices: FACE_TINTS.map(t => {
-        const on = st.agentSpec.tint === t[0];
-        return {label:t[1],
-          style: "width:32px;height:32px;border-radius:var(--r-ctl,11px);cursor:pointer;padding:0;"
-            + "background:linear-gradient(160deg," + t[0] + ",#0b0d0f);"
-            + "transition:transform .2s var(--ease),border-color .2s var(--ease);"
-            + (on ? "border:2px solid var(--accent);transform:scale(1.08)" : "border:1px solid var(--border)"),
-          pick: () => this.setSpec({tint:t[0]})};
-      }),
-      personalities: PERSONALITIES.map(p => ({label:p, style:chip(st.agentSpec.personality === p), pick: () => this.setSpec({personality:p})})),
-      answerStyles: ANSWER_STYLES.map(a => ({label:a, style:chip(st.agentSpec.answer === a), pick: () => this.setSpec({answer:a})})),
       /* ---- skills: every registered tool in one list. Context is not a choice —
          an agent reads the whole ontology, and anything with an effect still
          waits for a yes, so grouping by effect earned nothing here. ---- */
@@ -3806,97 +1562,6 @@ export default class PulseLogic extends DCLogic {
         {skills: prev.agentSpec.skills.length === SKILL_DEFS.length ? [] : SKILL_DEFS.map(d => d[0])})})),
       grantAllSkillsLabel: st.agentSpec.skills.length === SKILL_DEFS.length ? "Clear all" : "Grant all",
 
-      /* ---- the brief: you say the job, it asks the follow-ups ---- */
-      briefDraft: st.briefDraft || "",
-      briefPlaceholder: (st.briefThread || []).length ? "Answer, or add another job" : "What do you want this agent to do?",
-      setBriefDraft: (e) => this.setState({briefDraft:e.target.value}),
-      onBriefKey: (e) => { if (e.key === "Enter" && !e.shiftKey){ e.preventDefault(); this.sendBrief(); } },
-      sendBrief: () => this.sendBrief(),
-      briefEmpty: (st.briefThread || []).length === 0,
-      briefThread: (st.briefThread || []).map((m, i) => {
-        if (m.kind === "card"){
-          const q = BRIEF_QUESTIONS[m.q];
-          const picks = st.briefPicks[m.q] || [];
-          return {isCard:true, isMsg:false, title:q.title, sub:q.sub,
-            live: !m.done, answered: m.done === true,
-            answerSummary: picks.length ? picks.join(", ") : "Skipped",
-            rowStyle: "animation:expandIn .3s var(--ease) both",
-            cardStyle: "width:100%;background:var(--surface-strong);border:1px solid var(--border);border-radius:var(--card-r,18px);overflow:hidden;"
-              + (m.done ? "opacity:.72" : ""),
-            confirmLabel: picks.length ? "Use these " + picks.length : "Skip",
-            confirm: () => { if (!m.done) this.confirmBrief(m.q); },
-            options: q.options.map((o, oi) => {
-              const on = picks.indexOf(o[0]) > -1;
-              return {key: String.fromCharCode(65 + oi), label:o[0], meta:o[1],
-                style: "display:flex;align-items:center;gap:11px;width:100%;padding:10px 12px;border:0;"
-                  + (oi ? "border-top:1px solid var(--border);" : "")
-                  + "background:" + (on ? "var(--accent-faint)" : "none") + ";cursor:pointer;text-align:left;"
-                  + "transition:background .16s var(--ease)",
-                keyStyle: "flex:none;width:20px;height:20px;border-radius:7px;display:flex;align-items:center;justify-content:center;"
-                  + "font-family:" + MONO + ";font-size:9.5px;"
-                  + (on ? "background:var(--accent-fill,var(--accent));color:var(--on-accent);box-shadow:var(--accent-glow,none)" : "background:var(--surface-2);color:var(--faint)"),
-                labelStyle: "display:block;font-size:13px;color:" + (on ? "var(--ink)" : "var(--body)"),
-                pick: () => { if (!m.done) this.pickBrief(m.q, o[0]); }};
-            })};
-        }
-        return {isCard:false, isMsg:true, text:m.text,
-          rowStyle: "display:flex;justify-content:" + (m.role === "you" ? "flex-end" : "flex-start") + ";animation:expandIn .3s var(--ease) both",
-          bubbleStyle: "max-width:82%;padding:10px 14px;border-radius:var(--card-r,18px);font-size:13px;line-height:1.5;"
-            + (m.role === "you"
-                ? "background:var(--surface-strong);border:1px solid var(--border);color:var(--ink);border-bottom-right-radius:6px"
-                : "background:var(--accent-faint);border:1px solid var(--accent-line);color:var(--ink);border-bottom-left-radius:6px")};
-      }),
-      briefTasks: (st.agentSpec.tasks || []).map((t, i) => ({
-        title:t.title, meta:t.meta,
-        remove: () => this.setState(prev => ({agentSpec: Object.assign({}, prev.agentSpec,
-          {tasks: prev.agentSpec.tasks.filter((_, k) => k !== i)})}))
-      })),
-      hasTasks: (st.agentSpec.tasks || []).length > 0,
-      taskCount: (st.agentSpec.tasks || []).length + " job" + ((st.agentSpec.tasks || []).length === 1 ? "" : "s") + " briefed",
-
-      /* ---- training run ---- */
-      trainBg: st.trained ? "var(--accent-faint)" : "var(--surface)",
-      trainBorder: st.trained ? "var(--accent-line)" : "var(--border)",
-      trainTitle: st.training ? "Training" : st.trained ? "Trained on your ontology" : "Train from the ontology",
-      trainBody: st.training
-        ? TRAIN_PHASES[Math.min(st.trainPhase || 0, TRAIN_PHASES.length - 1)][0]
-        : st.trained
-          ? "It read the ontology, then wrote its own system prompt. Retrain after the data moves."
-          : "It will read the whole ontology, learn how this business words things, then research and write its own system prompt.",
-      trainLabel: st.training ? "Training…" : st.trained ? "Retrain" : "Train agent",
-      trainBusy: st.training === true,
-      trainIdle: st.training !== true,
-      trainPct: Math.round(((st.trainPhase || 0) / TRAIN_PHASES.length) * 100) + "%",
-      trainDashStyle: "stroke-dashoffset:" + (145 * (1 - (st.trainPhase || 0) / TRAIN_PHASES.length)).toFixed(1)
-        + ";transition:stroke-dashoffset .85s cubic-bezier(.22,.9,.16,1)",
-      trainPhaseLabel: st.training
-        ? "PHASE " + Math.min((st.trainPhase || 0) + 1, TRAIN_PHASES.length) + " OF " + TRAIN_PHASES.length
-        : "READY",
-      train: () => this.startTraining(),
-      trainSteps: st.trained || st.training,
-      trainLog: TRAIN_PHASES.slice(0, st.training ? (st.trainPhase || 0) : TRAIN_PHASES.length).map((p, i) => ({
-        text:p[0], meta:p[1], dot:LIME,
-        rowStyle: "display:flex;align-items:center;gap:10px;animation:expandIn .28s var(--ease) both"
-      })),
-      builderFooter: (() => {
-        const jobs = (st.agentSpec.tasks || []).length;
-        return "Full ontology context · every registered tool · "
-          + (jobs ? jobs + " job" + (jobs === 1 ? "" : "s") + " briefed" : "nothing briefed yet")
-          + " · anything with an effect waits for your yes";
-      })(),
-      saveLabel: st.builderMode === "tune" ? "Save changes" : "Create agent",
-      saveAgent: () => this.setState(prev => {
-        if (prev.builderMode === "tune") return {builderOpen:false};
-        const name = prev.agentSpec.name.trim() || "New agent";
-        const id = "a" + Date.now();
-        return {builderOpen:false, agentId:id,
-          agents: [{id, name, initials:prev.agentSpec.initials, bg:prev.agentSpec.bg, role:prev.agentSpec.persona || prev.agentSpec.personality + " · " + prev.agentSpec.answer.toLowerCase(),
-            when:"now", preview:"ready when you are.",
-            thread:[{kind:"stamp", text:"Just now"},
-              {kind:"agent", text: prev.trained
-                ? "trained and ready. i read the ontology and wrote my own prompt from it. what should i pick up first?"
-                : "created. i have no context yet. train me from the ontology and i'll be useful."}]}].concat(prev.agents)};
-      }),
       approvalsEmpty: approvals.length === 0,
       approvalsEmptyTitle: st.approvalFilter === "Decided" ? "Nothing decided yet"
         : st.approvalFilter === "Awaiting others" ? "Nothing waiting on anyone else" : "Nothing waiting on you",
@@ -4042,7 +1707,7 @@ export default class PulseLogic extends DCLogic {
       })(),
       homeSubline: "Answers come from the Jod-Z demo dataset. No live AI service is connected.",
       approvalsPill: jodzWaiting(),
-      goApprovals: () => { this.go("Work"); this.setState({workSection:"approvals"}); },
+      goApprovals: () => { const a = jodzState().approvals.find(x => x.status === "Awaiting approval"); if (a) jodzOpenRecord({kind:"approval", id:a.id}); },
       showApprovalNote: openKeys.length > 0 && !st.approvalNoteHidden,
       dismissApprovalNote: () => this.setState({approvalNoteHidden:true}),
       /* Home canvas: a decorative layer the user can switch, scoped to the
@@ -4163,7 +1828,6 @@ export default class PulseLogic extends DCLogic {
         style: labelStyle(st.hovered !== null, st.hoverTop)
       },
       isChat: page === "Home",
-      isWork: page === "Work",
       isSettings: page === "Settings",
       admin: adminModel,
       inboxCount: String(jodzDecisions().length),
@@ -4289,11 +1953,6 @@ export default class PulseLogic extends DCLogic {
       threadWidthStyle: "flex:0 0 auto;width:100%;margin:0 auto;padding:14px 4px 8px;"
         + "max-width:" + (st.thread.length && !st.chatRailPinned ? "880px" : "760px") + ";"
         + "transition:max-width .38s var(--ease)",
-      composerTools: [
-        {label:"Records", icon:ICONS.navRecords, go: () => this.setState({page:"Records"})},
-        {label:"Files", icon:ICONS.files, go: () => this.setState({page:"Records", recSection:"files"})},
-        {label:"Agents", icon:ICONS.navAgents, go: () => this.setState({page:"Agents"})}
-      ],
       composerPrompts: [
         {label:"What should we reorder?", tag:"STOCK", icon:ICONS.navStock,
           run: () => this.ask("What should we reorder?")},

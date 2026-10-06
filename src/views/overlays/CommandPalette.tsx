@@ -12,7 +12,7 @@ export default function CommandPalette({ v }: Props) {
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--dim)" strokeWidth="1.9" strokeLinecap="round" style={{"flex":"none"}}>
               <path d="m21 21-4.3-4.3 M17 11a6 6 0 1 1-12 0 6 6 0 0 1 12 0" />
             </svg>
-            <input value={v.query ?? ""} onChange={v.setQuery} onKeyDown={v.onQueryKey} autoFocus={true} placeholder="Search records, work, agents and actions" style={{"flex":"1","minWidth":"0","border":"0","outline":"0","fontSize":"15px","background":"none","color":"var(--ink)"}} />
+            <input value={v.query ?? ""} onChange={v.setQuery} onKeyDown={v.onQueryKey} autoFocus={true} placeholder="Search pages and actions" style={{"flex":"1","minWidth":"0","border":"0","outline":"0","fontSize":"15px","background":"none","color":"var(--ink)"}} />
             {v.hasQuery && (
               <>
                 <button className="ix3" onClick={v.clearQuery} title="Clear" style={{"flex":"none","width":"22px","height":"22px","border":"0","borderRadius":"8px","background":"var(--surface-2)","color":"var(--dim)","cursor":"pointer","display":"flex","alignItems":"center","justifyContent":"center"}}>

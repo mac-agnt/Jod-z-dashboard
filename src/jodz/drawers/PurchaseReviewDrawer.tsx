@@ -1,6 +1,6 @@
 /* Review a draft purchase: mix, supplier terms, payments and the before-and-after cash outlook. Nothing is sent to the supplier. */
 import { PRODUCTS } from "../data";
-import { useJodz, closeDrawer, decideApproval, requestPurchaseApproval, setPurchasePreview, goTo, getState, type JodzState } from "../store";
+import { useJodz, closeDrawer, decideApproval, requestPurchaseApproval, getState, type JodzState } from "../store";
 import { cashOutlook, poPayments, poTotal, poUnits, supplier, eur, num, fmtDate, productOfSku, sizeOfSku } from "../derive";
 import { Drawer, KV, Note, Btn, Pill, Section, Swatch, LineChart, Legend, Table } from "../ui";
 
@@ -50,15 +50,11 @@ export default function PurchaseReviewDrawer({ id }: { id: string }) {
         approved ? (
           <>
             <Pill tone="ok">Approved in demo</Pill>
-            <span style={{ flex: 1 }} />
-            <Btn onClick={() => goTo("Accounting", "cash")}>Open Cash Outlook</Btn>
           </>
         ) : (
           <>
             <Btn kind="primary" onClick={approve}>Approve in demo</Btn>
             <Btn kind="ghost" onClick={decline} disabled={!awaiting}>Decline</Btn>
-            <span style={{ flex: 1 }} />
-            <Btn onClick={() => { setPurchasePreview(true); goTo("Accounting", "cash"); }}>Preview in Cash Outlook</Btn>
           </>
         )
       }

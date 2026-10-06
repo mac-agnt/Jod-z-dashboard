@@ -111,7 +111,7 @@ function initial(): JodzState {
     drawer: null,
     toast: null,
     seq: 100,
-    sections: { Inventory: "stock", Accounting: "overview", Forecasting: "demand", Reporting: "summary", Trends: "signals", Advertising: "overview" },
+    sections: { Inventory: "stock", Forecasting: "demand", Advertising: "overview" },
     trendStatus: {},
     adChanges: { "cfp-clearance": "drafted" },
   };
@@ -146,28 +146,24 @@ export function registerNavigator(fn: (page: string) => void) {
   navigator = fn;
 }
 
-export const PAGE_FOR: Record<RecordLink["kind"], [string, string?]> = {
+/* Kinds without an entry open as a drawer over the current page. */
+export const PAGE_FOR: Partial<Record<RecordLink["kind"], [string, string?]>> = {
   variant: ["Inventory", "stock"],
   order: ["Dashboard"],
-  invoice: ["Accounting", "invoices"],
-  bill: ["Accounting", "invoices"],
   po: ["Inventory", "incoming"],
   return: ["Inventory", "returns"],
   retailer: ["Dashboard"],
   supplier: ["Inventory", "incoming"],
-  approval: ["Work"],
-  task: ["Work"],
   campaign: ["Advertising"],
-  signal: ["Trends", "signals"],
 };
 
 export function openRecord(link: RecordLink, page?: string, section?: string) {
   const draftPo = link.kind === "po" && state.pos.some((x) => x.id === link.id && x.status === "Draft");
-  const [p, sec] = draftPo ? ["Forecasting", "buying"] : PAGE_FOR[link.kind];
+  const [p, sec] = draftPo ? ["Forecasting", "buying"] : PAGE_FOR[link.kind] || [];
   const target = page || p;
   const s = section || sec;
-  set((st) => ({ drawer: { kind: link.kind, id: link.id }, sections: s ? { ...st.sections, [target]: s } : st.sections }));
-  navigator?.(target);
+  set((st) => ({ drawer: { kind: link.kind, id: link.id }, sections: target && s ? { ...st.sections, [target]: s } : st.sections }));
+  if (target) navigator?.(target);
 }
 
 export function goTo(page: string, section?: string) {

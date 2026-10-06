@@ -5,10 +5,7 @@ import { staff, linkLabel, fmtDate } from "./derive";
 import { Drawer, KV, Note, Btn, Pill, RecLink, Section } from "./ui";
 import SalesWholesale from "./pages/SalesWholesale";
 import Inventory from "./pages/Inventory";
-import Accounting from "./pages/Accounting";
 import Forecasting from "./pages/Forecasting";
-import Reporting from "./pages/Reporting";
-import Trends from "./pages/Trends";
 import Advertising from "./pages/Advertising";
 import CampaignDrawer from "./drawers/CampaignDrawer";
 import SignalDrawer from "./drawers/SignalDrawer";
@@ -21,15 +18,12 @@ import ReturnDrawer from "./drawers/ReturnDrawer";
 import InvoiceDrawer from "./drawers/InvoiceDrawer";
 import BillDrawer from "./drawers/BillDrawer";
 
-export const JODZ_PAGES = ["Dashboard", "Inventory", "Accounting", "Forecasting", "Trends", "Advertising", "Reporting"];
+export const JODZ_PAGES = ["Dashboard", "Inventory", "Forecasting", "Advertising"];
 
 export function JodzPage({ page }: { page: string }) {
   if (page === "Dashboard") return <SalesWholesale />;
   if (page === "Inventory") return <Inventory />;
-  if (page === "Accounting") return <Accounting />;
   if (page === "Forecasting") return <Forecasting />;
-  if (page === "Reporting") return <Reporting />;
-  if (page === "Trends") return <Trends />;
   if (page === "Advertising") return <Advertising />;
   return null;
 }

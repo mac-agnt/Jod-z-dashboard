@@ -112,7 +112,7 @@ function Overview() {
             ))}
           </div>
         </Card>
-        <Card title="Planned ad spend in the cash outlook" right={<Btn sm kind="ghost" onClick={() => goTo("Accounting", "cash")}>Cash Outlook</Btn>}>
+        <Card title="Planned ad spend in the cash outlook">
           <div className="jz-list">
             {plan.map((p) => <div key={p.month}><span style={{ flex: 1 }}>{p.label}</span><b className="jz-mono">{eur(p.amount)}</b></div>)}
           </div>

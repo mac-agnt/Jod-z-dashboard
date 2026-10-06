@@ -16,12 +16,12 @@ npm run build      # type-check + production build into dist/
 
 | Area | Where |
 | --- | --- |
-| Jod-Z modules: Sales & Wholesale, Inventory, Accounting, Forecasting, Trends, Advertising, Reporting, record drawers | `src/jodz/pages/`, `src/jodz/drawers/` |
+| Jod-Z modules: Sales & Wholesale, Inventory, Forecasting, Advertising, record drawers | `src/jodz/pages/`, `src/jodz/drawers/` |
 | Trend signals, Meta Ads and Google Ads data (simulated) and their selectors | `src/jodz/marketing.ts` |
 | Shared Jod-Z dataset, store and selectors (every figure comes from here) | `src/jodz/data.ts`, `src/jodz/store.ts`, `src/jodz/derive.ts` |
 | Home briefing and fixture chat answers | `src/jodz/home.ts` |
-| Pulse pages: Home chat, Agents, Work, Records, Activity, Settings | `src/views/pages/` |
-| Overlays: ⌘K palette, agent studio, Helios mini chat, work viewer, new record, background gallery | `src/views/overlays/` |
+| Pulse pages: Home chat, Settings | `src/views/pages/` |
+| Overlays: ⌘K palette, Helios mini chat, background gallery | `src/views/overlays/` |
 | App frame: sidebar, top bar, notifications | `src/views/AppShell.tsx` |
 | State and behaviour | `src/logic/PulseLogic.js` |
 | Pulse demo content (contacts, files, ontology, settings) | `src/logic/data.js` |

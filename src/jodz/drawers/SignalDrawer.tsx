@@ -1,8 +1,31 @@
-import { useJodz, closeDrawer, openRecord } from "../store";
-import { variantRows } from "../derive";
-import { Drawer, KV, Section, Note, Pill, VariantName, LineChart } from "../ui";
-import { signalRows, SEARCH_SERIES, SEARCH_WEEKS } from "../marketing";
-import { SignalActions } from "../pages/Trends";
+import { useJodz, closeDrawer, openRecord, goTo } from "../store";
+import { variantRows, product } from "../derive";
+import { Drawer, KV, Section, Note, Pill, VariantName, LineChart, Btn } from "../ui";
+import {
+  signalRows, watchSignal, dismissSignal, applySignal, removeSignal, SEARCH_SERIES, SEARCH_WEEKS, AD_CHANGES, adChangeStatus, draftAdChange, type SignalRow,
+} from "../marketing";
+
+function SignalActions({ x }: { x: SignalRow }) {
+  const s = useJodz();
+  const a = x.action;
+  return (
+    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+      {a?.type === "uplift" && (x.status === "Applied"
+        ? <Btn sm kind="ghost" onClick={() => removeSignal(x.id)}>Remove from forecast</Btn>
+        : <Btn sm kind="primary" onClick={() => applySignal(x.id)}>Apply +{a.pct}% to {product(a.productId).name}</Btn>)}
+      {a?.type === "link" && <Btn sm onClick={() => (a.link ? openRecord(a.link) : goTo(a.page, a.section))}>{a.label}</Btn>}
+      {a?.type === "ad" && (() => {
+        const ch = AD_CHANGES.find((c) => c.id === a.changeId)!;
+        const st = adChangeStatus(s, ch.id);
+        return st === "none"
+          ? <Btn sm onClick={() => draftAdChange(ch.id)}>Draft ad change</Btn>
+          : <Btn sm onClick={() => ch.campaignId && openRecord({ kind: "campaign", id: ch.campaignId })}>{st === "approved" ? "Ad change approved in demo" : "Ad change drafted"}: open</Btn>;
+      })()}
+      {x.status !== "Watching" && x.status !== "Applied" && <Btn sm kind="ghost" onClick={() => watchSignal(x.id)}>Watch</Btn>}
+      {x.status !== "Dismissed" && x.status !== "Applied" && <Btn sm kind="ghost" onClick={() => dismissSignal(x.id)}>Dismiss</Btn>}
+    </div>
+  );
+}
 
 const TERM: Record<string, string> = { "sig-navy": "navy riding leggings kids", "sig-pink": "pink riding leggings" };
 

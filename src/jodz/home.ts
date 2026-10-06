@@ -74,8 +74,8 @@ export function numbers(s: JodzState = getState()) {
   return [
     { label: "Net sales, 30 days", value: eur(ss.net), delta: (ss.change >= 0 ? "+" : "") + (ss.change * 100).toFixed(1) + "% vs prior", deltaColor: ss.change >= 0 ? "var(--ok)" : "var(--bad)", open: () => goTo("Dashboard") },
     { label: "Open wholesale", value: eur(ob.value), delta: ob.count + " orders · " + ob.short + " units short", deltaColor: ob.short ? "var(--bad)" : "var(--dim)", open: () => goTo("Dashboard") },
-    { label: "Bank cash", value: eur(bankCash(s)), delta: "Not revenue", deltaColor: "var(--dim)", open: () => goTo("Accounting", "overview") },
-    { label: "Overdue", value: eur(receivables(s).overdueTotal), delta: receivables(s).overdue.length + " invoice", deltaColor: "var(--warn)", open: () => goTo("Accounting", "invoices") },
+    { label: "Bank cash", value: eur(bankCash(s)), delta: "Not revenue", deltaColor: "var(--dim)", },
+    { label: "Overdue", value: eur(receivables(s).overdueTotal), delta: receivables(s).overdue.length + " invoice", deltaColor: "var(--warn)", open: () => { const i = receivables(s).overdue[0]; if (i) openRecord({ kind: "invoice", id: i.id }); } },
   ];
 }
 
@@ -150,7 +150,7 @@ function afford(s: JodzState): Answer {
       : "Not comfortably. With receipts otherwise unchanged, the " + eur(poTotal(po)) + " purchase (" + eur(pays[0].amount) + " deposit within 30 days, " + eur(pays[1].amount) + " in days 31 to 60) takes the 60-day estimate from " + eur(base.horizons[1].closing) + " to " + eur(withP.horizons[1].closing) + ", below the " + eur(buf) + " buffer from " + fmtDate(withP.breach?.date || SNAPSHOT) + ". The lowest point would be " + eur(withP.low.balance) + " on " + fmtDate(withP.low.date) + ". Options: split the order so the Admiral Navy and Midnight Black lines go first, or collect JOD-INV2031 before committing.",
     cols: ["Horizon", "Without purchase", "With purchase"],
     rows: base.horizons.map((h, i) => ["Day " + h.day + " · " + fmtDate(h.date), eur(h.closing), eur(withP.horizons[i].closing)]),
-    actions: [["Review purchase and cash impact", 1, { kind: "po", id: "PO-D193" }], ["Open Cash Outlook", 0, undefined, () => goTo("Accounting", "cash")]],
+    actions: [["Review purchase and cash impact", 1, { kind: "po", id: "PO-D193" }]],
   };
 }
 
@@ -206,7 +206,7 @@ function trends(s: JodzState): Answer {
     text: "The strongest signals, from the demo data: " + parts.join("; ") + ". Search and social figures are a simulated index, not Google Trends. " + (applied ? applied + " signal" + (applied > 1 ? "s are" : " is") + " applied to the forecast." : "None are applied to the forecast yet."),
     cols: ["Signal", "Change", "Confidence", "Status"],
     rows: rows.slice(0, 5).map((x) => [x.title.length > 44 ? x.title.slice(0, 43) + "…" : x.title, x.change, x.confidence, x.status]),
-    actions: [["Open Trends", 1, undefined, () => goTo("Trends", "signals")], ["Open the navy signal", 0, { kind: "signal", id: "sig-navy" }]],
+    actions: [["Open the navy signal", 1, { kind: "signal", id: "sig-navy" }]],
   };
 }
 

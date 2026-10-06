@@ -471,18 +471,10 @@ const STREAM_DEFS = [
 ];
 const NAV = [
   {label:"Home", icon:"helios", page:"Home"},
-  {label:"Agents", icon:"navAgents", page:"Agents"},
   {label:"Sales & Wholesale", icon:"navSales", page:"Dashboard", dot:true},
   {label:"Inventory", icon:"navStock", page:"Inventory"},
-  {label:"Accounting", icon:"navBooks", page:"Accounting"},
   {label:"Forecasting", icon:"navForecast", page:"Forecasting"},
-  {label:"Trends", icon:"navTrends", page:"Trends"},
-  {label:"Advertising", icon:"navAds", page:"Advertising"},
-  {label:"Reporting", icon:"navReport", page:"Reporting"},
-  {divider:true},
-  {label:"Work", icon:"navWork", page:"Work", quiet:true},
-  {label:"Records", icon:"navRecords", page:"Records", quiet:true},
-  {label:"Activity", icon:"pulseLine", page:"Activity", dot:true, quiet:true}
+  {label:"Advertising", icon:"navAds", page:"Advertising"}
 ];
 
 /* Inbox items follow the real InboxItem shape: what happened, why it matters, what I can do.
